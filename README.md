@@ -1,17 +1,21 @@
-# Discord Bot – genekerman
+# Discord Bot – Gene Kerman
 
-A modular, production-ready Discord bot built with **discord.py 2.x**.
+A modular, production-ready Discord bot built with **discord.py 2.x** designed for Kerbal Space Program (KSP) communities. Features a fully-fledged economy, corporation system, contracts, weekly missions, and AI-powered screenshot analysis.
 
 ## Features
 
-| Category | Commands |
+| Category | Description / Commands |
 |---|---|
-| **General** | `/help`, `/ping` |
-| **Info** | `/serverinfo`, `/userinfo`, `/botinfo` |
-| **Admin** | `/announce`, `/reload`, `/shutdown`, `/setprefix` |
-| **Moderation** | `/kick`, `/ban`, `/unban`, `/mute`, `/unmute`, `/purge`, `/warn`, `/warnings` |
+| **Contracts** | Player-to-player and AI contract system (`/contract create`, `/contracts`) |
+| **Weekly Missions** | AI-generated weekly challenges with difficulty tiers |
+| **Corporations** | Create and manage corps, private channels (`/g corpsetup`, `/g corp`) |
+| **Economy** | KCoins currency, balances, payments (`/balance`, `/pay`, `/leaderboard`) |
+| **XP System** | Leveling system with rewards for chatting and completing missions |
+| **Screenshots** | AI analysis of KSP screenshots using Gemini AI to detect celestial bodies and mods (`/analyze`) |
+| **GKChannels** | Gate bot commands to specific channels (`/gk setchannel`) |
+| **Admin/Mod** | General moderation, announcements, localization settings, and configuration |
 
-All commands are available as **slash commands** (`/`) and select ones also as prefix commands.
+All commands are available as **slash commands** (`/`).
 
 ---
 
@@ -20,7 +24,8 @@ All commands are available as **slash commands** (`/`) and select ones also as p
 ### 1. Clone / open the project
 
 ```bash
-cd /home/ayd/Desktop/genekerman
+git clone https://github.com/KSPRehber/UPoK-DCBot.git genekerman
+cd genekerman
 ```
 
 ### 2. Create a virtual environment & install dependencies
@@ -31,35 +36,26 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment variables
+### 3. Configure environment variables and settings
 
 ```bash
 cp .env.example .env
 nano .env   # fill in your values
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `DISCORD_TOKEN` | ✅ | Bot token from [Discord Developer Portal](https://discord.com/developers/applications) |
-| `DISCORD_CLIENT_ID` | ☑️ | Application / client ID |
-| `DISCORD_CLIENT_SECRET` | ☑️ | Client secret (for OAuth flows) |
-| `GUILD_IDS` | ☑️ | Comma-separated guild IDs for fast dev slash-sync (leave blank = global) |
-| `COMMAND_PREFIX` | ☑️ | Prefix for text commands (default `!`) |
-| `BOT_OWNER_ID` | ☑️ | Your Discord user ID (unlocks owner-only commands) |
-| `LOG_LEVEL` | ☑️ | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+You must configure:
+- `DISCORD_TOKEN`: Bot token from [Discord Developer Portal](https://discord.com/developers/applications)
+- Firebase Admin SDK credentials JSON (for Firestore database)
+- `GEMINI_API_KEY`: For AI contract reviews and screenshot analysis
 
-### 4. Create the bot & invite it
+**Note:** Economy rates, cooldowns, XP curves, and feature toggles (like allowing mods to bypass weekly mission locks) can be safely adjusted in `settings.py`.
 
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
-2. **Bot** tab → **Add Bot** → copy the token into `.env`
-3. **Bot** tab → enable all **Privileged Gateway Intents** (Presence, Server Members, Message Content)
-4. **OAuth2 → URL Generator**: scopes = `bot` + `applications.commands`, permissions = **Administrator**
-5. Open the generated URL to invite the bot to your server
-
-### 5. Run the bot
+### 4. Run the bot
 
 ```bash
-python bot.py
+# Don't forget to activate the virtual environment!
+source .venv/bin/activate
+python bot.py --sync
 ```
 
 ---
@@ -68,27 +64,31 @@ python bot.py
 
 ```
 genekerman/
-├── bot.py              # Entry point: loads cogs, syncs commands, starts bot
-├── config.py           # Env-var loader (import cfg anywhere)
+├── bot.py                # Entry point: loads cogs, syncs commands, starts bot
+├── config.py             # Env-var loader
+├── settings.py           # Tunable gameplay/economy variables
 ├── requirements.txt
-├── .env.example        # Template – copy to .env
-├── .env                # Your secrets (gitignored)
+├── .env.example          # Template – copy to .env
+├── .env                  # Your secrets (gitignored)
+├── data/                 # Firestore integration & models
+├── i18n.py               # Localization (TR/EN)
 └── cogs/
-    ├── general.py      # help, ping
-    ├── admin.py        # announce, reload, shutdown, setprefix
-    ├── moderation.py   # kick, ban, unban, mute, unmute, purge, warn, warnings
-    └── info.py         # serverinfo, userinfo, botinfo
+    ├── contracts.py      # Contract system logic
+    ├── contract_views.py # Interactive UI for contracts
+    ├── corps.py          # Corporation management
+    ├── economy.py        # KCoins & transactions
+    ├── weeklymissions.py # Automated weekly missions board
+    ├── screenshots.py    # Gemini AI screenshot analyzer
+    ├── xp.py             # Leveling system
+    ├── gkchannels.py     # Channel restrictions
+    ├── general.py        # Help, ping
+    ├── admin.py          # Admin commands
+    ├── moderation.py     # Moderation tools
+    └── info.py           # Server info
 ```
 
-## Adding a New Cog
+## Security & Architecture Notes
 
-1. Create `cogs/mycog.py` with a `setup(bot)` async function
-2. Add `"cogs.mycog"` to the `cog_modules` list in `bot.py`
-
----
-
-## Security Notes
-
-- `.env` is **never** committed — add it to `.gitignore`
-- All admin/mod commands are permission-gated server-side
-- Warnings are stored in memory; restart clears them — add a DB for persistence
+- `.env` and Firebase credentials are **never** committed — ensure they are in `.gitignore`.
+- All persistent data (balances, users, contracts, guilds) is stored in **Firebase Firestore**.
+- Mod-only commands are permission-gated via Discord's native Role/Permissions system.
