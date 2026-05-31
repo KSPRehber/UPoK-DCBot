@@ -155,7 +155,20 @@ class GeneKermanBot(commands.Bot):
 # ── Runner ───────────────────────────────────────────────────────────────────
 async def main() -> None:
     bot = GeneKermanBot()
+    
+    async def console_listener():
+        loop = asyncio.get_running_loop()
+        while True:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+            if not line:
+                break
+            if line.strip().lower() == "stop":
+                log.info("Stop command received from console. Shutting down...")
+                await bot.close()
+                break
+
     async with bot:
+        asyncio.create_task(console_listener())
         await bot.start(cfg.TOKEN)
 
 
