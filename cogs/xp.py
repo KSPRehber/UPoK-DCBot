@@ -228,6 +228,7 @@ class XP(commands.Cog, name="XP"):
     # ── /setxp (admin) ────────────────────────────────────────────────────────
     @app_commands.command(name="setxp", description="Set a user's XP (Admin only)")
     @app_commands.describe(member="Target member", amount="XP amount to set")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def setxp(
         self,

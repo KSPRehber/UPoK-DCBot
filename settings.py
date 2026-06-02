@@ -65,8 +65,8 @@ LEADERBOARD_PAGE_SIZE = 10
 # XP awarded per difficulty point (e.g. difficulty 7 × 50 = 350 XP)
 SCREENSHOT_XP_PER_DIFFICULTY = 50
 
-# KCoins awarded per difficulty point (e.g. difficulty 7 × 30 = 210 KCoins)
-SCREENSHOT_COINS_PER_DIFFICULTY = 30
+# KCoins awarded per difficulty point (e.g. difficulty 7 × 18 = 126 KCoins)
+SCREENSHOT_COINS_PER_DIFFICULTY = 18
 
 # ── Corporations ─────────────────────────────────────────────────────────────
 

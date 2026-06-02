@@ -9,12 +9,6 @@ from config import cfg
 from i18n import t, tp, get_user_lang, set_user_lang, get_server_lang, set_server_lang, LANG_NAMES
 
 
-class General(commands.Cog, name="General"):
-    """General-purpose commands."""
-
-    def __init__(self, bot: commands.Bot) -> None:
-        self.bot = bot
-
 def mod_only():
     async def predicate(interaction: discord.Interaction) -> bool:
         if isinstance(interaction.user, discord.Member):
@@ -25,6 +19,13 @@ def mod_only():
                     or interaction.user.guild_permissions.administrator)
         return False
     return app_commands.check(predicate)
+
+
+class General(commands.Cog, name="General"):
+    """General-purpose commands."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
 
     # ── Prefix: !help ────────────────────────────────────────────────────────
     @commands.command(name="help")
@@ -53,23 +54,47 @@ def mod_only():
         )
         embed.add_field(
             name=_t("general.help.general"),
-            value=f"`{pfx}help` · `{pfx}ping` · `{pfx}langswitch` · `{pfx}tsl`",
+            value=(f"`{pfx}help` - List all available commands\n"
+                   f"`{pfx}ping` - Check the bot's latency\n"
+                   f"`{pfx}langswitch` - Toggle your personal bot language (TR/EN)\n"
+                   f"`{pfx}tsl` - Toggle server-wide bot language (TR/EN) — Mod only"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Economy & Corps",
+            value=(f"`{pfx}bal` - Check your KCoins balance\n"
+                   f"`{pfx}pay` - Transfer KCoins to another user\n"
+                   f"`{pfx}corpsetup` - Establish a corporation channel\n"
+                   f"`{pfx}corpdisband` - Disband your corporation\n"
+                   f"`{pfx}corprename` - Rename your corporation\n"
+                   f"`{pfx}leaderboard` - View top players by XP/KCoins"),
             inline=False,
         )
         embed.add_field(
             name=_t("general.help.info"),
-            value=f"`{pfx}serverinfo` · `{pfx}userinfo` · `{pfx}botinfo`",
+            value=(f"`{pfx}serverinfo` - Display server information\n"
+                   f"`{pfx}userinfo` - Display user information\n"
+                   f"`{pfx}botinfo` - Display bot statistics and uptime"),
             inline=False,
         )
         embed.add_field(
             name=_t("general.help.admin"),
-            value=f"`{pfx}reload` · `{pfx}shutdown` · `{pfx}announce` · `{pfx}setprefix`",
+            value=(f"`{pfx}reload` - Reload bot extensions/cogs\n"
+                   f"`{pfx}shutdown` - Stop the bot safely\n"
+                   f"`{pfx}announce` - Send an announcement to a channel\n"
+                   f"`{pfx}setprefix` - Change the bot's command prefix"),
             inline=False,
         )
         if cfg.ENABLE_MOD_COMMANDS:
             embed.add_field(
                 name=_t("general.help.mod"),
-                value=f"`{pfx}kick` · `{pfx}ban` · `{pfx}unban` · `{pfx}mute` · `{pfx}unmute` · `{pfx}purge` · `{pfx}warn`",
+                value=(f"`{pfx}kick` - Kick a user from the server\n"
+                       f"`{pfx}ban` - Ban a user from the server\n"
+                       f"`{pfx}unban` - Unban a user\n"
+                       f"`{pfx}mute` - Mute a user\n"
+                       f"`{pfx}unmute` - Unmute a user\n"
+                       f"`{pfx}purge` - Delete multiple messages\n"
+                       f"`{pfx}warn` - Issue a warning to a user"),
                 inline=False,
             )
         embed.set_footer(text=_t("general.help.footer"))
@@ -115,6 +140,7 @@ def mod_only():
 
     # ── /tsl (server language, mod-only) ─────────────────────────────────────
     @app_commands.command(name="tsl", description="Toggle server-wide bot language (TR/EN) — Mod only")
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def tsl(self, interaction: discord.Interaction) -> None:
         gid = interaction.guild_id

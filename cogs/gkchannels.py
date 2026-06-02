@@ -146,6 +146,7 @@ class GKChannels(commands.Cog, name="GKChannels"):
         name="setchannel",
         description="Toggle this channel as a Gene Kerman channel (Mod only)",
     )
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def setchannel(self, interaction: discord.Interaction) -> None:
         gid = interaction.guild_id

@@ -137,8 +137,8 @@ class Contracts(commands.Cog, name="Contracts"):
             tp(gid, uid, "ct.created", name=user.display_name), ephemeral=True)
 
     @app_commands.command(name="contractreset", description="[MOD] Cancel all active contracts for a user")
-    @app_commands.describe(user="User whose contracts to reset")
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.describe(user="The user whose contracts should be cancelled")
+    @app_commands.default_permissions(manage_guild=True)
     async def contractreset(self, interaction: discord.Interaction, user: discord.Member):
         gid = interaction.guild_id
         await interaction.response.defer(ephemeral=True)

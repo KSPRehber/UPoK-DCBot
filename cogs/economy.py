@@ -145,6 +145,7 @@ class Economy(commands.Cog, name="Economy"):
     # ── /givemoney ────────────────────────────────────────────────────────────
     @app_commands.command(name="givemoney", description="Give KCoins to a user (Mod only)")
     @app_commands.describe(member="Who to give to", amount="Amount to give", reason="Reason (optional)")
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def givemoney(
         self, interaction: discord.Interaction, member: discord.Member,
@@ -171,6 +172,7 @@ class Economy(commands.Cog, name="Economy"):
     # ── /fine ─────────────────────────────────────────────────────────────────
     @app_commands.command(name="fine", description="Deduct KCoins from a user (Mod only)")
     @app_commands.describe(member="Who to fine", amount="Amount to deduct", reason="Reason (optional)")
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def fine(
         self, interaction: discord.Interaction, member: discord.Member,
@@ -205,6 +207,7 @@ class Economy(commands.Cog, name="Economy"):
     # ── /setbalance ───────────────────────────────────────────────────────────
     @app_commands.command(name="setbalance", description="Set a user's KCoin balance (Mod only)")
     @app_commands.describe(member="Target member", amount="New balance amount")
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def setbalance(self, interaction: discord.Interaction, member: discord.Member, amount: int) -> None:
         gid = interaction.guild_id

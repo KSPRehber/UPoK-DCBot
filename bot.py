@@ -104,10 +104,54 @@ class GeneKermanBot(commands.Bot):
                 name=group_name,
                 description="Gene Kerman bot commands",
             )
+
+            admin_group = app_commands.Group(
+                name="admin", 
+                description="Admin commands",
+                default_permissions=discord.Permissions(administrator=True)
+            )
+            mod_group = app_commands.Group(
+                name="mod", 
+                description="Moderation commands",
+                default_permissions=discord.Permissions(kick_members=True)
+            )
+            info_group = app_commands.Group(name="info", description="Info commands")
+
             for cmd in list(self.tree.get_commands()):
                 self.tree.remove_command(cmd.name)
-                parent.add_command(cmd)
+                
+                cog_name = getattr(cmd.binding, "qualified_name", "").lower()
+                
+                cmd_is_admin = False
+                cmd_is_mod = False
+                
+                if cmd.default_permissions:
+                    if getattr(cmd.default_permissions, "administrator", False):
+                        cmd_is_admin = True
+                    if getattr(cmd.default_permissions, "kick_members", False) or getattr(cmd.default_permissions, "manage_guild", False):
+                        cmd_is_mod = True
+                if any("mod_only" in getattr(c, "__qualname__", "") for c in getattr(cmd, "checks", [])):
+                    cmd_is_mod = True
+                
+                if cog_name == "admin" or cmd_is_admin:
+                    admin_group.add_command(cmd)
+                elif cog_name == "moderation" or cmd_is_mod:
+                    mod_group.add_command(cmd)
+                elif cog_name == "info":
+                    info_group.add_command(cmd)
+                else:
+                    parent.add_command(cmd)
+
+            if info_group.commands:
+                parent.add_command(info_group)
+
             self.tree.add_command(parent)
+            
+            # Add mod and admin to top-level so their default_permissions are respected by Discord
+            if admin_group.commands:
+                self.tree.add_command(admin_group)
+            if mod_group.commands:
+                self.tree.add_command(mod_group)
 
         if _SYNC_COMMANDS:
             await self._sync_commands()
@@ -131,6 +175,8 @@ class GeneKermanBot(commands.Bot):
         else:
             synced = await self.tree.sync()
             log.info("Synced %d global slash commands", len(synced))
+            
+        self.tree.on_error = self.on_app_command_error
 
     async def on_ready(self) -> None:
         log.info("=" * 50)
@@ -140,7 +186,7 @@ class GeneKermanBot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.playing,
-                name="/gk help",
+                name="/g",
                 state="Unified Players of KSP Bot",
             )
         )
@@ -156,7 +202,27 @@ class GeneKermanBot(commands.Bot):
             await ctx.send(f"⚠️ Missing argument: `{error.param.name}`")
         else:
             log.error("Unhandled command error: %s", error, exc_info=True)
-            await ctx.send("💥 An unexpected error occurred.")
+            try:
+                maintainer = self.get_user(815228135049527297) or await self.fetch_user(815228135049527297)
+                if maintainer:
+                    await maintainer.send(f"⚠️ **Error in prefix command `{ctx.command.name if ctx.command else 'Unknown'}`:**\n```py\n{error}\n```")
+            except Exception as exc:
+                log.error("Failed to notify maintainer: %s", exc)
+            await ctx.send("💥 An unexpected error occurred. The maintainer (<@815228135049527297>) has been pinged via DM.")
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        log.error("Unhandled app command error: %s", error, exc_info=True)
+        try:
+            maintainer = self.get_user(815228135049527297) or await self.fetch_user(815228135049527297)
+            if maintainer:
+                await maintainer.send(f"⚠️ **Error in slash command `{interaction.command.name if interaction.command else 'Unknown'}`:**\n```py\n{error}\n```")
+        except Exception as exc:
+            log.error("Failed to notify maintainer: %s", exc)
+        msg = "💥 An unexpected error occurred. The maintainer (<@815228135049527297>) has been pinged via DM."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────

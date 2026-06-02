@@ -13,6 +13,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 import settings
@@ -313,6 +314,105 @@ async def _handle_selection(interaction: discord.Interaction, week_key: str, gui
     log.info("%s accepted weekly mission #%d (%s)", interaction.user, mission["id"], desc[:40])
 
 
+# ── Custom Mission View ──────────────────────────────────────────────────────
+
+class CustomMissionAcceptView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Accept Custom Mission", style=discord.ButtonStyle.green, custom_id="cm:accept")
+    async def accept_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = interaction.guild_id
+        uid = interaction.user.id
+
+        corp = _get_corp(guild_id, uid)
+        if not corp:
+            await interaction.response.send_message(t(guild_id, "wm.no_corp"), ephemeral=True)
+            return
+
+        embed = interaction.message.embeds[0]
+        
+        # Check expiration
+        footer_text = embed.footer.text or ""
+        parts = dict(p.split(":") for p in footer_text.split("|") if ":" in p)
+        expires = int(parts.get("expires", "0"))
+        duration_days = int(parts.get("duration_days", "7"))
+        
+        if datetime.now(TZ).timestamp() > expires:
+            await interaction.response.send_message("❌ This custom mission has expired.", ephemeral=True)
+            return
+            
+        msg_id = interaction.message.id
+        if _has_selected(guild_id, "custom", uid, msg_id):
+            await interaction.response.send_message(t(guild_id, "wm.already"), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        corp_channel_id = int(corp["channel_id"])
+        channel = interaction.client.get_channel(corp_channel_id)
+        if not channel:
+            try:
+                channel = await interaction.client.fetch_channel(corp_channel_id)
+            except Exception:
+                await interaction.followup.send("❌ Corp channel not found.", ephemeral=True)
+                return
+        
+        import re
+        coins = 0
+        fine = 0
+        xp = 0
+        for field in embed.fields:
+            if "💰" in field.name:
+                m = re.search(r'\+(\d+)', field.value)
+                if m: coins = int(m.group(1))
+            elif "XP" in field.name:
+                m = re.search(r'\+(\d+)', field.value)
+                if m: xp = int(m.group(1))
+            elif "Fine" in field.name:
+                m = re.search(r'(\d+)', field.value)
+                if m: fine = int(m.group(1))
+                
+        desc = embed.description
+        
+        now = datetime.now(TZ)
+        due = (now + timedelta(days=duration_days)).strftime("%Y-%m-%d")
+        
+        from data import contracts as cdb
+        c = cdb.create_contract(
+            guild_id=guild_id,
+            issuer_id=interaction.client.user.id,
+            issuer_name="Gene Kerman",
+            contractor_id=uid,
+            contractor_name=interaction.user.display_name,
+            mission=desc,
+            payment=coins,
+            fine=fine,
+            due_date=due,
+        )
+        
+        sym = settings.CURRENCY_SYMBOL
+        c_embed = discord.Embed(
+            title="🎯 Custom Mission",
+            description=desc,
+            color=discord.Color.gold(),
+        )
+        c_embed.add_field(name="💰", value=f"+{coins} {sym}", inline=True)
+        c_embed.add_field(name="✨ XP", value=f"+{xp}", inline=True)
+        c_embed.add_field(name="⚠️ Fine", value=f"{fine} {sym}", inline=True)
+        c_embed.add_field(name="📅 Due", value=due, inline=True)
+        c_embed.set_footer(text=f"Contract: {c['contract_id']}")
+        
+        from cogs.contract_views import ContractWorkView
+        view = ContractWorkView(c["contract_id"], guild_id)
+        msg = await channel.send(embed=c_embed, view=view)
+        cdb.update_contract(guild_id, c["contract_id"], dm_message_id=str(msg.id), status=cdb.ACTIVE)
+        
+        _save_selection(guild_id, "custom", uid, msg_id)
+        
+        await interaction.followup.send(f"✅ Custom mission accepted! Contract posted to {channel.mention}.", ephemeral=True)
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
@@ -323,6 +423,7 @@ class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
 
     async def cog_load(self):
         self.refresh_loop.start()
+        self.bot.add_view(CustomMissionAcceptView())
 
     async def cog_unload(self):
         self.refresh_loop.cancel()
@@ -335,6 +436,19 @@ class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
     @refresh_loop.before_loop
     async def _wait_ready(self):
         await self.bot.wait_until_ready()
+
+    async def _cleanup_old_missions(self, channel: discord.TextChannel, current_msg_id: int):
+        try:
+            async for message in channel.history(limit=50):
+                if message.id == current_msg_id:
+                    continue
+                if message.author.id == self.bot.user.id and message.embeds:
+                    embed = message.embeds[0]
+                    if embed.title and ("Haftalık Görevler" in embed.title or "Weekly Missions" in embed.title):
+                        await message.delete()
+                        log.info("Deleted old weekly mission embed %d", message.id)
+        except Exception as e:
+            log.error("Failed to cleanup old missions: %s", e)
 
     async def _ensure_embed(self):
         ch_id = settings.WEEKLY_MISSIONS_CHANNEL_ID
@@ -375,6 +489,7 @@ class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
                 msg = await channel.fetch_message(msg_id)
                 await msg.edit(embed=embed, view=view)
                 log.info("Updated weekly missions embed (msg %d)", msg_id)
+                await self._cleanup_old_missions(channel, current_msg_id=msg_id)
                 return
             except discord.NotFound:
                 pass
@@ -383,6 +498,52 @@ class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
         msg = await channel.send(embed=embed, view=view)
         _save_missions(guild_id, week_key, missions, msg.id)
         log.info("Posted weekly missions embed (msg %d)", msg.id)
+        await self._cleanup_old_missions(channel, current_msg_id=msg.id)
+
+    @app_commands.command(name="add_custom_mission", description="Add an additional custom mission (Mod Only)")
+    @app_commands.default_permissions(kick_members=True)
+    @app_commands.describe(
+        desc_en="Description in English",
+        desc_tr="Description in Turkish",
+        xp="XP reward",
+        coins="Coin reward",
+        fine="Fine if failed",
+        accept_hours="Hours until contract accepting expires",
+        duration_days="Days to complete the contract once accepted"
+    )
+    async def add_custom_mission(
+        self, interaction: discord.Interaction, 
+        desc_en: str, desc_tr: str, 
+        xp: int, coins: int, fine: int, 
+        accept_hours: int, duration_days: int
+    ):
+        if isinstance(interaction.user, discord.Member):
+            if not (interaction.user.guild_permissions.kick_members or interaction.user.guild_permissions.administrator):
+                await interaction.response.send_message("❌ Mod only.", ephemeral=True)
+                return
+        
+        embed = discord.Embed(
+            title="🎯 Custom Mission / Özel Görev",
+            description=f"**EN:** {desc_en}\n\n**TR:** {desc_tr}",
+            color=discord.Color.purple(),
+        )
+        sym = settings.CURRENCY_SYMBOL
+        embed.add_field(name="💰", value=f"+{coins} {sym}", inline=True)
+        embed.add_field(name="✨ XP", value=f"+{xp}", inline=True)
+        embed.add_field(name="⚠️ Fine", value=f"{fine} {sym}", inline=True)
+        
+        now = datetime.now(TZ)
+        expires_at = now + timedelta(hours=accept_hours)
+        embed.add_field(name="⏰ Accepts Until", value=discord.utils.format_dt(expires_at, style="F"), inline=False)
+        embed.set_footer(text=f"duration_days:{duration_days}|expires:{int(expires_at.timestamp())}")
+
+        view = CustomMissionAcceptView()
+        
+        ch_id = settings.WEEKLY_MISSIONS_CHANNEL_ID
+        channel = interaction.client.get_channel(ch_id) or await interaction.client.fetch_channel(ch_id)
+        
+        await channel.send(embed=embed, view=view)
+        await interaction.response.send_message("✅ Custom mission posted to mission-control.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

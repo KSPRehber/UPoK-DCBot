@@ -291,6 +291,7 @@ class Roles(commands.Cog, name="Roles"):
         description="[MOD] Remove KSP level roles from a user"
     )
     @app_commands.describe(target="The user to remove level roles from")
+    @app_commands.default_permissions(kick_members=True)
     @mod_only()
     async def removeroles_cmd(self, interaction: discord.Interaction, target: discord.Member) -> None:
         mod_uid = interaction.user.id
