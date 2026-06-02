@@ -78,7 +78,6 @@ TEMPLATES = [
     ('Perform a propulsive landing on Eve and return using ISRU', "Eve'de itici güçle iniş yapın ve ISRU kullanarak dönün", 10, 'extreme'),
     ('Complete a stock propeller Eve ascent', "Stok pervane ile Eve'den yükselme yapın", 9, 'extreme'),
     ('Send a crewed station to Kcalbeloh Orbit', 'Kcalbeloh yörüngesine insanlı bir istasyon görevi gönderin', 10, 'extreme'),
-,
     ('Perform a flyby of Sarnus', 'Sarnus yakın geçişi yapın', 5, 'exploration'),
     ('Land on Tekto and return', "Tekto'ya iniş yapın ve dönün", 7, 'return'),
     ('Deploy a relay network around Urlum', 'Urlum etrafında röle ağı kurun', 6, 'construction'),
