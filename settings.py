@@ -138,4 +138,4 @@ LEVEL_ROLES = {
 KSP_NOTIFICATION_CHECK_INTERVAL = 600  # 10 minutes
 
 # API server port (should match API_PORT in .env)
-KSP_API_PORT = 5850
+KSP_API_PORT = 5022

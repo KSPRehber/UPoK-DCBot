@@ -59,7 +59,7 @@ class Config:
     # ── KSP API Server ──────────────────────────
     KSP_API_ENABLED: bool = _optional("KSP_API_ENABLED", "true").lower() not in ("false", "0", "no", "off")
     API_HOST: str = _optional("API_HOST", "0.0.0.0")
-    API_PORT: int = int(_optional("API_PORT", "5850"))
+    API_PORT: int = int(_optional("API_PORT", "5022"))
     API_SECRET_KEY: str = _optional("API_SECRET_KEY", "gk-change-this-secret-key")
 
     # ── Firebase / Firestore ────────────────────
