@@ -50,19 +50,21 @@ class ContractOfferView(View):
 
     @button(label="✅ Accept", style=discord.ButtonStyle.green, custom_id="ct_accept::")
     async def accept_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c or c["status"] != cdb.PENDING:
-            await interaction.response.send_message("❌", ephemeral=True)
+            await interaction.followup.send("❌", ephemeral=True)
             return
         cdb.update_contract(gid, cid, status=cdb.ACTIVE)
         c["status"] = cdb.ACTIVE
         e = _embed(c, gid)
         e.color = discord.Color.green()
-        await interaction.response.edit_message(embed=e, view=ContractWorkView(cid, gid))
+        await interaction.edit_original_response(embed=e, view=ContractWorkView(cid, gid))
 
     @button(label="❌ Refuse", style=discord.ButtonStyle.red, custom_id="ct_refuse::")
     async def refuse_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
@@ -72,7 +74,7 @@ class ContractOfferView(View):
         c["status"] = cdb.CANCELLED
         e = _embed(c, gid)
         e.color = discord.Color.red()
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
 
 
 # ── Work View (Give Up / Submit) ─────────────────────────────────────────────
@@ -87,6 +89,7 @@ class ContractWorkView(View):
 
     @button(label="🏳️ Give Up", style=discord.ButtonStyle.grey, custom_id="ct_giveup::")
     async def giveup_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c or c["status"] != cdb.ACTIVE:
@@ -96,10 +99,11 @@ class ContractWorkView(View):
         c["status"] = cdb.CANCELLED
         e = _embed(c, gid)
         e.color = discord.Color.red()
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
 
     @button(label="📤 Submit", style=discord.ButtonStyle.blurple, custom_id="ct_submit::")
     async def submit_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c or c["status"] != cdb.ACTIVE:
@@ -113,17 +117,17 @@ class ContractWorkView(View):
                     files_found.append({"url": att.url, "filename": att.filename,
                                         "content_type": att.content_type or "application/octet-stream"})
         if not files_found:
-            await interaction.response.send_message("❌ No files found. Upload files here first.", ephemeral=True)
+            await interaction.followup.send("❌ No files found. Upload files here first.", ephemeral=True)
             return
         # Require at least one image (screenshot)
         has_image = any(f["content_type"].startswith("image/") for f in files_found)
         if not has_image:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Missing screenshot (image). Upload at least a screenshot.",
                 ephemeral=True)
             return
         view = FileSelectView(cid, gid, files_found)
-        await interaction.response.send_message(embed=view._generate_embed(), view=view, ephemeral=True)
+        await interaction.followup.send(embed=view._generate_embed(), view=view, ephemeral=True)
 
 
 # ── File Selection (ephemeral, no persistence needed) ────────────────────────
@@ -151,47 +155,51 @@ class FileSelectView(View):
 
     @button(emoji="⬆️", style=discord.ButtonStyle.grey, row=0)
     async def up_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         if self.files:
             self.current_idx = (self.current_idx - 1) % len(self.files)
-        await interaction.response.edit_message(embed=self._generate_embed(), view=self)
+        await interaction.edit_original_response(embed=self._generate_embed(), view=self)
 
     @button(emoji="⬇️", style=discord.ButtonStyle.grey, row=0)
     async def down_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         if self.files:
             self.current_idx = (self.current_idx + 1) % len(self.files)
-        await interaction.response.edit_message(embed=self._generate_embed(), view=self)
+        await interaction.edit_original_response(embed=self._generate_embed(), view=self)
 
     @button(emoji="🔄", label="Toggle Active", style=discord.ButtonStyle.blurple, row=0)
     async def toggle_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         if self.current_idx in self.active_indices:
             self.active_indices.remove(self.current_idx)
         else:
             self.active_indices.add(self.current_idx)
-        await interaction.response.edit_message(embed=self._generate_embed(), view=self)
+        await interaction.edit_original_response(embed=self._generate_embed(), view=self)
 
     @button(label="✅ Confirm & Send", style=discord.ButtonStyle.green, row=1)
     async def confirm(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         c = cdb.get_contract(self.gid, self.cid)
         if not c or c.get("status") != cdb.ACTIVE:
-            await interaction.response.send_message("❌ Contract already submitted or no longer active.", ephemeral=True)
+            await interaction.followup.send("❌ Contract already submitted or no longer active.", ephemeral=True)
             return
 
         selected_files = [f for i, f in enumerate(self.files) if i in self.active_indices]
         if not selected_files:
-            await interaction.response.send_message("❌ You must select at least one file.", ephemeral=True)
+            await interaction.followup.send("❌ You must select at least one file.", ephemeral=True)
             return
 
         has_image = any(f["content_type"].startswith("image/") for f in selected_files)
 
         if not has_image:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Missing in selection: screenshot (image). Select at least a screenshot.",
                 ephemeral=True)
             return
 
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(view=self)
+        await interaction.edit_original_response(view=self)
 
         stored = []
         for f in selected_files:
@@ -392,13 +400,14 @@ class ContractReviewView(View):
 
     @button(label="✅ Accept", style=discord.ButtonStyle.green, custom_id="ct_rv_acc::")
     async def accept_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c or c["status"] != cdb.SUBMITTED:
             return
         # Only the issuer can review
         if str(interaction.user.id) != str(c.get("issuer_id")):
-            await interaction.response.send_message("❌ Only the contract issuer can review submissions.", ephemeral=True)
+            await interaction.followup.send("❌ Only the contract issuer can review submissions.", ephemeral=True)
             return
         from datetime import datetime
         cdb.update_contract(gid, cid, status=cdb.COMPLETED, completed_at=datetime.utcnow().isoformat())
@@ -416,7 +425,7 @@ class ContractReviewView(View):
         if screenshots:
             flist = "\n".join(f"🖼️ [{s['filename']}]({s['url']})" for s in screenshots)
             e.add_field(name="🖼️ Screenshots", value=flist, inline=False)
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
         try:
             contractor = await interaction.client.fetch_user(int(c["contractor_id"]))
             ne = discord.Embed(title=f"✅ {t(gid, 'ct.accepted')}",
@@ -428,19 +437,20 @@ class ContractReviewView(View):
 
     @button(label="❌ Refuse", style=discord.ButtonStyle.red, custom_id="ct_rv_ref::")
     async def refuse_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c or c["status"] != cdb.SUBMITTED:
             return
         # Only the issuer can review
         if str(interaction.user.id) != str(c.get("issuer_id")):
-            await interaction.response.send_message("❌ Only the contract issuer can review submissions.", ephemeral=True)
+            await interaction.followup.send("❌ Only the contract issuer can review submissions.", ephemeral=True)
             return
         cdb.update_contract(gid, cid, status=cdb.DISPUTED)
         c["status"] = cdb.DISPUTED
         e = _embed(c, gid)
         e.color = discord.Color.red()
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
         try:
             contractor = await interaction.client.fetch_user(int(c["contractor_id"]))
             de = discord.Embed(title=f"⚠️ {t(gid, 'ct.disputed')}",
@@ -464,13 +474,14 @@ class DisputeView(View):
 
     @button(label="🤝 Settle", style=discord.ButtonStyle.grey, custom_id="ct_settle::")
     async def settle_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
             return
         # Bot-issued contracts can't be settled
         if str(c["issuer_id"]) == str(interaction.client.user.id):
-            await interaction.response.send_message("❌ AI contracts cannot be settled.", ephemeral=True)
+            await interaction.followup.send("❌ AI contracts cannot be settled.", ephemeral=True)
             return
         try:
             issuer = await interaction.client.fetch_user(int(c["issuer_id"]))
@@ -478,9 +489,9 @@ class DisputeView(View):
                               description=t(gid, 'ct.settle_desc', name=c['contractor_name']),
                               color=discord.Color.light_grey())
             await issuer.send(embed=e, view=SettleApprovalView(cid, gid))
-            await interaction.response.send_message(t(gid, "ct.settle_sent"), ephemeral=True)
+            await interaction.followup.send(t(gid, "ct.settle_sent"), ephemeral=True)
         except Exception:
-            await interaction.response.send_message("❌", ephemeral=True)
+            await interaction.followup.send("❌", ephemeral=True)
 
     @button(label="⏰ More Time", style=discord.ButtonStyle.grey, custom_id="ct_moretime::")
     async def moretime_btn(self, interaction: discord.Interaction, btn: Button):
@@ -507,7 +518,7 @@ class DisputeView(View):
                     await orig.edit(embed=_embed(c, gid), view=ContractWorkView(cid, gid))
                 except Exception:
                     pass
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"⏰ Extended to **{end_of_week}**. Submit again!",
                 embed=None, view=None,
             )
@@ -517,13 +528,14 @@ class DisputeView(View):
 
     @button(label="💰 Pay Fine", style=discord.ButtonStyle.red, custom_id="ct_payfine::")
     async def payfine_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
             return
         bal = store.get_user(gid, int(c["contractor_id"]))["balance"]
         if bal < c["fine"]:
-            await interaction.response.send_message(t(gid, "ct.no_funds"), ephemeral=True)
+            await interaction.followup.send(t(gid, "ct.no_funds"), ephemeral=True)
             return
         await store.add_balance(gid, int(c["contractor_id"]), -c["fine"])
         await store.add_balance(gid, int(c["issuer_id"]), c["fine"] + c["payment"])
@@ -533,17 +545,18 @@ class DisputeView(View):
         e = _embed(c, gid)
         e.color = discord.Color.dark_red()
         e.set_footer(text=t(gid, "ct.fine_paid"))
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
 
     @button(label="⚖️ Sue", style=discord.ButtonStyle.blurple, custom_id="ct_sue::")
     async def sue_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
             return
         mod_ch_id = settings.CONTRACT_MOD_CHANNEL_ID
         if not mod_ch_id:
-            await interaction.response.send_message("❌ Not configured.", ephemeral=True)
+            await interaction.followup.send("❌ Not configured.", ephemeral=True)
             return
         cdb.update_contract(gid, cid, status=cdb.MOD_REVIEW)
         bot = interaction.client
@@ -556,7 +569,7 @@ class DisputeView(View):
         if files:
             e.add_field(name="📁", value="\n".join(f"📎 [{f['filename']}]({f['url']})" for f in files), inline=False)
         await ch.send(embed=e, view=ModReviewView(cid, gid))
-        await interaction.response.edit_message(content=t(gid, "ct.sued"), view=None)
+        await interaction.edit_original_response(content=t(gid, "ct.sued"), view=None)
 
 
 # ── More Time Modal ──────────────────────────────────────────────────────────
@@ -570,16 +583,17 @@ class MoreTimeModal(discord.ui.Modal, title="Extend Deadline"):
         self.gid = guild_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         from datetime import datetime, date
         # Validate format
         try:
             new_dt = datetime.strptime(self.new_date.value, "%Y-%m-%d").date()
         except ValueError:
-            await interaction.response.send_message("❌ Invalid format. Use YYYY-MM-DD.", ephemeral=True)
+            await interaction.followup.send("❌ Invalid format. Use YYYY-MM-DD.", ephemeral=True)
             return
         # Must be in the future
         if new_dt <= date.today():
-            await interaction.response.send_message("❌ Date must be in the future.", ephemeral=True)
+            await interaction.followup.send("❌ Date must be in the future.", ephemeral=True)
             return
         # Don't apply yet — send approval to issuer
         c = cdb.get_contract(self.gid, self.cid)
@@ -595,9 +609,9 @@ class MoreTimeModal(discord.ui.Modal, title="Extend Deadline"):
                 color=discord.Color.blue(),
             )
             await issuer.send(embed=e, view=MoreTimeApprovalView(self.cid, self.gid, self.new_date.value))
-            await interaction.response.send_message(f"⏰ Extension request sent ({self.new_date.value}).", ephemeral=True)
+            await interaction.followup.send(f"⏰ Extension request sent ({self.new_date.value}).", ephemeral=True)
         except Exception:
-            await interaction.response.send_message("❌ Could not contact issuer.", ephemeral=True)
+            await interaction.followup.send("❌ Could not contact issuer.", ephemeral=True)
 
 
 # ── More Time Approval View ──────────────────────────────────────────────────
@@ -613,6 +627,7 @@ class MoreTimeApprovalView(View):
 
     @button(label="✅ Approve Extension", style=discord.ButtonStyle.green, custom_id="ct_mt_y::")
     async def yes_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
@@ -626,7 +641,7 @@ class MoreTimeApprovalView(View):
                 # last word is the date
                 new_date = desc.strip().split()[-1]
         cdb.update_contract(gid, cid, due_date=new_date, status=cdb.ACTIVE)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"✅ Deadline extended to **{new_date}**. Contract is active again.",
             embed=None, view=None,
         )
@@ -643,8 +658,9 @@ class MoreTimeApprovalView(View):
 
     @button(label="❌ Refuse", style=discord.ButtonStyle.red, custom_id="ct_mt_n::")
     async def no_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"❌ Extension refused.", embed=None, view=None,
         )
         # Notify contractor — dispute view stays
@@ -669,18 +685,20 @@ class SettleApprovalView(View):
 
     @button(label="✅ Accept Settlement", style=discord.ButtonStyle.green, custom_id="ct_stl_y::")
     async def yes_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
             return
         await store.add_balance(gid, int(c["issuer_id"]), c["payment"])
         cdb.update_contract(gid, cid, status=cdb.CANCELLED)
-        await interaction.response.edit_message(content=f"✅ {t(gid, 'ct.settled')}", embed=None, view=None)
+        await interaction.edit_original_response(content=f"✅ {t(gid, 'ct.settled')}", embed=None, view=None)
 
     @button(label="❌ Refuse", style=discord.ButtonStyle.red, custom_id="ct_stl_n::")
     async def no_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         _, gid = _parse(btn.custom_id)
-        await interaction.response.edit_message(content=f"❌ {t(gid, 'ct.settle_refused')}", embed=None, view=None)
+        await interaction.edit_original_response(content=f"❌ {t(gid, 'ct.settle_refused')}", embed=None, view=None)
 
 
 # ── Mod Review View ──────────────────────────────────────────────────────────
@@ -695,6 +713,7 @@ class ModReviewView(View):
 
     @button(label="✅ Enforce Fine", style=discord.ButtonStyle.green, custom_id="ct_mod_f::")
     async def enforce_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
@@ -707,14 +726,15 @@ class ModReviewView(View):
         await store.add_balance(gid, int(c["issuer_id"]), c["payment"])
         from datetime import datetime
         cdb.update_contract(gid, cid, status=cdb.COMPLETED, completed_at=datetime.utcnow().isoformat())
-        await interaction.response.edit_message(content=f"✅ Fine enforced ({fine}). Escrow refunded.", view=None)
+        await interaction.edit_original_response(content=f"✅ Fine enforced ({fine}). Escrow refunded.", view=None)
 
     @button(label="❌ Cancel Fine", style=discord.ButtonStyle.red, custom_id="ct_mod_c::")
     async def cancel_btn(self, interaction: discord.Interaction, btn: Button):
+        await interaction.response.defer()
         cid, gid = _parse(btn.custom_id)
         c = cdb.get_contract(gid, cid)
         if not c:
             return
         await store.add_balance(gid, int(c["issuer_id"]), c["payment"])
         cdb.update_contract(gid, cid, status=cdb.CANCELLED)
-        await interaction.response.edit_message(content="❌ Fine cancelled. Escrow refunded.", view=None)
+        await interaction.edit_original_response(content="❌ Fine cancelled. Escrow refunded.", view=None)

@@ -91,11 +91,14 @@ class LevelSelector(Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+            
         uid = interaction.user.id
         gid = interaction.guild_id
         
         if "0" in self.values and len(self.values) == 1:
-            await interaction.response.send_message(tp(gid, uid, "roles.no_titles"), ephemeral=True)
+            await interaction.followup.send(tp(gid, uid, "roles.no_titles"), ephemeral=True)
             return
 
         selected_levels = set(int(v) for v in self.values)
@@ -103,7 +106,7 @@ class LevelSelector(Select):
         # Verify they aren't cheating the client
         unlocked = await sync_user_levels(interaction.client, uid)
         if any(lvl not in unlocked for lvl in selected_levels):
-            await interaction.response.send_message(tp(gid, uid, "roles.invalid_selection"), ephemeral=True)
+            await interaction.followup.send(tp(gid, uid, "roles.invalid_selection"), ephemeral=True)
             return
             
         added_count = 0
@@ -142,7 +145,7 @@ class LevelSelector(Select):
             except discord.Forbidden:
                 log.warning("Missing permissions to manage roles for %s in %s", uid, guild.id)
                 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             tp(gid, uid, "roles.updated", count=len(selected_levels)),
             ephemeral=True
         )
@@ -161,6 +164,7 @@ class GenericRoleView(View):
         
     @discord.ui.select(custom_id="level_role_dropdown", options=[discord.SelectOption(label="loading", value="0")])
     async def fallback_callback(self, interaction: discord.Interaction, select: Select):
+        await interaction.response.defer(ephemeral=True)
         uid = interaction.user.id
         gid = interaction.guild_id
         unlocked = await sync_user_levels(interaction.client, uid)
@@ -196,6 +200,7 @@ class ModLevelRemoveSelector(Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         selected = set(int(v) for v in self.values)
         guild = interaction.guild
         uid = self.target.id
@@ -225,12 +230,12 @@ class ModLevelRemoveSelector(Select):
             try:
                 await self.target.remove_roles(*removed_roles, reason=f"Mod {interaction.user} removed level roles")
             except discord.Forbidden:
-                await interaction.response.send_message(tp(gid, mod_uid, "roles.mod_no_perms"), ephemeral=True)
+                await interaction.followup.send(tp(gid, mod_uid, "roles.mod_no_perms"), ephemeral=True)
                 return
                 
         # Disable select
         self.disabled = True
-        await interaction.response.edit_message(view=self.view)
+        await interaction.edit_original_response(view=self.view)
         
         await interaction.followup.send(
             tp(gid, mod_uid, "roles.mod_success", count='ALL' if remove_all else len(selected), user=self.target.mention),
