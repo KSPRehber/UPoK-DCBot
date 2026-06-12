@@ -139,3 +139,40 @@ KSP_NOTIFICATION_CHECK_INTERVAL = 600  # 10 minutes
 
 # API server port (should match API_PORT in .env)
 KSP_API_PORT = 5022
+
+# ── Known Celestial Bodies ───────────────────────────────────────────────────
+# Used by the heuristic mission classifier (fallback when Gemini is unavailable).
+# The AI classifier handles any body name from text automatically — this list
+# only matters when AI is down. Add any modded bodies your community uses here.
+# Sorted roughly by distance from the star so the first match wins on short names
+# (e.g. "Kerbin" matches before "Kerbol" would if listed after).
+KNOWN_CELESTIAL_BODIES: list[str] = [
+    # ── Stock Kerbol System ──────────────────────────────────────────────
+    "Kerbol",
+    "Moho",
+    "Eve", "Gilly",
+    "Kerbin", "Mun", "Minmus",
+    "Duna", "Ike",
+    "Dres",
+    "Jool", "Laythe", "Vall", "Tylo", "Bop", "Pol",
+    "Eeloo",
+    # ── Outer Planets Mod (OPM) ──────────────────────────────────────────
+    "Sarnus", "Hale", "Ovok", "Slate", "Tekto",
+    "Urlum", "Polta", "Priax", "Wal", "Tal",
+    "Neidon", "Thatmo", "Nissee",
+    "Plock", "Karen",
+    # ── Kcalbeloh System ─────────────────────────────────────────────────
+    "Kcalbeloh",
+    "Suluco", "Yeldo", "Noyreg", "Efil", "Otsol", "Ambrosh",
+    "Doru", "Krul", "Iehus", "Cet", "Lond",
+    # ── Real Solar System (RSS) / Real Exoplanets ────────────────────────
+    "Sun", "Mercury", "Venus", "Earth", "Moon",
+    "Mars", "Phobos", "Deimos",
+    "Ceres",
+    "Jupiter", "Io", "Europa", "Ganymede", "Callisto",
+    "Saturn", "Titan", "Enceladus", "Rhea", "Dione", "Tethys", "Mimas",
+    "Uranus", "Miranda", "Ariel", "Umbriel", "Titania", "Oberon",
+    "Neptune", "Triton",
+    "Pluto", "Charon",
+    "Eris",
+]

@@ -113,6 +113,10 @@ class ContractCreateRequest(BaseModel):
     modlist: Optional[str] = None  # Comma-separated list of loaded assembly names
 
 
+class ContractReviewRequest(BaseModel):
+    approve: bool  # True = accept the submission, False = refuse (→ dispute)
+
+
 # ── Submissions ──────────────────────────────────────────────────────────────
 
 class SubmissionResult(BaseModel):

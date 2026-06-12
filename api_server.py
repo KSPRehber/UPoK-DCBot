@@ -25,7 +25,7 @@ from api_models import (
     UserProfile,
     WeeklyMissionsResponse, Mission, MissionSelectRequest, MissionSelectResponse,
     ContractSummary, ContractListResponse, ContractAcceptResponse,
-    CorpInfo, CorpListResponse, ContractCreateRequest,
+    CorpInfo, CorpListResponse, ContractCreateRequest, ContractReviewRequest,
     SubmissionResult, FlightSubmission, VesselSnapshot,
     Notification, NotificationsResponse,
 )
@@ -251,17 +251,12 @@ def _classify_heuristic(missions: list[dict]) -> list[dict]:
         else:
             m["mission_type"] = "active_vessel"
 
-        # Body detection
-        bodies = ["Kerbol", "Moho", "Eve", "Gilly", "Kerbin", "Mun", "Minmus",
-                  "Duna", "Ike", "Dres", "Jool", "Laythe", "Vall", "Tylo",
-                  "Bop", "Pol", "Eeloo"]
         m["required_body"] = None
-        for body in bodies:
+        for body in settings.KNOWN_CELESTIAL_BODIES:
             if body.lower() in desc_lower:
                 m["required_body"] = body
                 break
 
-        # Situation detection
         m["required_situation"] = None
         if "orbit" in desc_lower:
             m["required_situation"] = "ORBITING"
@@ -277,22 +272,13 @@ def _classify_heuristic(missions: list[dict]) -> list[dict]:
 
 # ── Single-contract classification (for human-issued contracts) ──────────
 
-# Keywords for heuristic — covers English and Turkish
-_BUILD_KEYWORDS_EN = [
+_BUILD_KEYWORDS = [
     "build", "construct", "assemble", "design", "create", "make",
     "deploy a relay", "deploy a communication", "station with",
 ]
-_BUILD_KEYWORDS_TR = [
-    "tasarım", "tasarla", "inşa", "yap", "oluştur", "monte",
-    "kur", "üret", "dizayn", "uçak", "roket", "araç",
-]
-_FLIGHT_KEYWORDS_EN = [
+_FLIGHT_KEYWORDS = [
     "orbit", "land on", "fly to", "reach", "dock", "rendezvous",
     "return", "flyby", "intercept", "capture", "eva", "splashdown",
-]
-_FLIGHT_KEYWORDS_TR = [
-    "yörünge", "iniş", "uç", "ulaş", "kenetle", "dön",
-    "geçiş", "yakala", "temas",
 ]
 
 
@@ -300,37 +286,31 @@ def _classify_text_heuristic(mission_text: str) -> dict:
     """Classify a single mission description using keyword heuristics."""
     text_lower = mission_text.lower()
 
-    # Check build keywords (EN + TR)
-    is_build = any(kw in text_lower for kw in _BUILD_KEYWORDS_EN + _BUILD_KEYWORDS_TR)
-    is_flight = any(kw in text_lower for kw in _FLIGHT_KEYWORDS_EN + _FLIGHT_KEYWORDS_TR)
+    is_build = any(kw in text_lower for kw in _BUILD_KEYWORDS)
+    is_flight = any(kw in text_lower for kw in _FLIGHT_KEYWORDS)
 
-    # If it has build keywords but no flight keywords, it's craft_build
-    # If it has both, flight takes priority (e.g. "build and fly to orbit" = active_vessel)
+    # Build keywords without flight keywords = craft_build.
+    # Both present = flight takes priority ("build and fly to orbit" = active_vessel).
     if is_build and not is_flight:
         mission_type = "craft_build"
     else:
         mission_type = "active_vessel"
 
-    # Body detection
-    bodies = ["Kerbol", "Moho", "Eve", "Gilly", "Kerbin", "Mun", "Minmus",
-              "Duna", "Ike", "Dres", "Jool", "Laythe", "Vall", "Tylo",
-              "Bop", "Pol", "Eeloo"]
     required_body = None
-    for body in bodies:
+    for body in settings.KNOWN_CELESTIAL_BODIES:
         if body.lower() in text_lower:
             required_body = body
             break
 
-    # Situation detection
     required_situation = None
     if mission_type == "active_vessel":
-        if "orbit" in text_lower or "yörünge" in text_lower:
+        if "orbit" in text_lower:
             required_situation = "ORBITING"
-        elif "land" in text_lower or "iniş" in text_lower:
+        elif "land" in text_lower:
             required_situation = "LANDED"
-        elif "flyby" in text_lower or "geçiş" in text_lower:
+        elif "flyby" in text_lower:
             required_situation = "SUB_ORBITAL"
-        elif "dock" in text_lower or "kenetl" in text_lower:
+        elif "dock" in text_lower:
             required_situation = "ORBITING"
 
     return {
@@ -615,6 +595,85 @@ async def accept_contract(contract_id: str, user: dict = Depends(get_current_use
     log.info("KSP: %s accepted contract %s", user["username"], contract_id)
 
     return ContractAcceptResponse(success=True, message="Contract accepted!")
+
+
+@app.post("/api/v1/contracts/{contract_id}/review", response_model=ContractAcceptResponse)
+async def review_submission(contract_id: str, req: ContractReviewRequest,
+                            user: dict = Depends(get_current_user)):
+    """Issuer reviews a submitted contract: approve (→ completed, pay contractor)
+    or refuse (→ disputed). Mirrors the Discord ContractReviewView buttons so the
+    review can be done from the KSP mod without switching to Discord."""
+    gid = int(user["guild_id"])
+    uid = str(user["user_id"])
+
+    c = cdb.get_contract(gid, contract_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    # Only the issuer reviews submissions (the contractor is the submitter).
+    if str(c.get("issuer_id")) != uid:
+        raise HTTPException(status_code=403, detail="Only the contract issuer can review submissions.")
+
+    if c.get("status") != cdb.SUBMITTED:
+        return ContractAcceptResponse(success=False, message="Contract is not awaiting review.")
+
+    contractor_id = int(c["contractor_id"])
+
+    if req.approve:
+        cdb.update_contract(gid, contract_id, status=cdb.COMPLETED,
+                            completed_at=datetime.utcnow().isoformat())
+        await store.add_balance(gid, contractor_id, c["payment"])
+        c["status"] = cdb.COMPLETED
+        _create_notification(
+            gid, contractor_id, "review_result",
+            "✅ Mission Approved!",
+            f"Your submission for \"{c['mission'][:80]}\" was approved. "
+            f"+{c['payment']} {settings.CURRENCY_SYMBOL} paid.",
+            {"contract_id": contract_id},
+        )
+        # Best-effort Discord DM so the contractor is notified outside the game too.
+        if _bot_instance:
+            try:
+                import discord
+                from i18n import t
+                contractor = await _bot_instance.fetch_user(contractor_id)
+                ne = discord.Embed(
+                    title=f"✅ {t(gid, 'ct.accepted')}",
+                    description=t(gid, 'ct.accepted_desc',
+                                 payment=c['payment'], sym=settings.CURRENCY_SYMBOL),
+                    color=discord.Color.green())
+                await contractor.send(embed=ne)
+            except Exception as exc:
+                log.warning("Could not DM contractor after KSP review-approve: %s", exc)
+        log.info("KSP: %s approved submission for contract %s", user["username"], contract_id)
+        return ContractAcceptResponse(success=True, message="Submission approved! Payment released.")
+
+    # Refuse → dispute. Hand the dispute flow back to Discord (DisputeView is
+    # Discord-only), so the contractor can settle / request more time / pay fine.
+    cdb.update_contract(gid, contract_id, status=cdb.DISPUTED)
+    c["status"] = cdb.DISPUTED
+    _create_notification(
+        gid, contractor_id, "review_result",
+        "⚠️ Submission Refused",
+        f"Your submission for \"{c['mission'][:80]}\" was refused. "
+        f"Check Discord to resolve the dispute.",
+        {"contract_id": contract_id},
+    )
+    if _bot_instance:
+        try:
+            import discord
+            from i18n import t
+            from cogs.contract_views import DisputeView
+            contractor = await _bot_instance.fetch_user(contractor_id)
+            de = discord.Embed(
+                title=f"⚠️ {t(gid, 'ct.disputed')}",
+                description=t(gid, 'ct.disputed_desc'),
+                color=discord.Color.orange())
+            await contractor.send(embed=de, view=DisputeView(contract_id, gid))
+        except Exception as exc:
+            log.warning("Could not DM contractor after KSP review-refuse: %s", exc)
+    log.info("KSP: %s refused submission for contract %s", user["username"], contract_id)
+    return ContractAcceptResponse(success=True, message="Submission refused. Dispute opened on Discord.")
 
 
 @app.post("/api/v1/contracts/{contract_id}/cancel", response_model=ContractAcceptResponse)

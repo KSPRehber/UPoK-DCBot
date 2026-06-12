@@ -19,12 +19,11 @@ log = logging.getLogger(__name__)
 
 # ── i18n ─────────────────────────────────────────────────────────────────────
 S.update({
-    "ksp.linkcode.title":  {"tr": "🎮 KSP Bağlantı Kodu", "en": "🎮 KSP Link Code"},
-    "ksp.linkcode.desc":   {"tr": "KSP'de bu kodu girin:\n\n# `{code}`\n\n⏰ 10 dakika içinde geçerliliğini yitirir.",
-                            "en": "Enter this code in KSP:\n\n# `{code}`\n\n⏰ Expires in 10 minutes."},
-    "ksp.linkcode.footer": {"tr": "Gene Kerman KSP Mod", "en": "Gene Kerman KSP Mod"},
-    "ksp.linked.title":    {"tr": "✅ KSP Bağlandı", "en": "✅ KSP Linked"},
-    "ksp.linked.desc":     {"tr": "KSP hesabınız başarıyla bağlandı!", "en": "Your KSP account has been linked successfully!"},
+    "ksp.linkcode.title":  {"en": "🎮 KSP Link Code"},
+    "ksp.linkcode.desc":   {"en": "Enter this code in KSP:\n\n# `{code}`\n\n⏰ Expires in 10 minutes."},
+    "ksp.linkcode.footer": {"en": "Gene Kerman KSP Mod"},
+    "ksp.linked.title":    {"en": "✅ KSP Linked"},
+    "ksp.linked.desc":     {"en": "Your KSP account has been linked successfully!"},
 })
 
 

@@ -27,18 +27,18 @@ log = logging.getLogger(__name__)
 TZ = timezone(timedelta(hours=3))  # GMT+3
 
 S.update({
-    "wm.title":        {"tr": "📋 Haftalık Görevler", "en": "📋 Weekly Missions"},
-    "wm.week":         {"tr": "Hafta {n} ({start} – {end})", "en": "Week {n} ({start} – {end})"},
-    "wm.locked":       {"tr": "🔒 Görev seçimi kilitlendi.", "en": "🔒 Mission selection is locked."},
-    "wm.no_corp":      {"tr": "❌ Önce bir şirket kurmalısınız! `/g corpsetup` kullanın.", "en": "❌ You need a corporation first! Use `/g corpsetup`."},
-    "wm.already":      {"tr": "❌ Bu görevi zaten seçtiniz.", "en": "❌ You already selected this mission."},
-    "wm.accepted":     {"tr": "✅ Görev #{n} kabul edildi! Sözleşme {channel} kanalına gönderildi.", "en": "✅ Mission #{n} accepted! Contract posted to {channel}."},
-    "wm.easy":         {"tr": "🟢 Kolay", "en": "🟢 Easy"},
-    "wm.medium":       {"tr": "🟡 Orta", "en": "🟡 Medium"},
-    "wm.hard":         {"tr": "🔴 Zor", "en": "🔴 Hard"},
-    "wm.extreme":      {"tr": "⚫ Aşırı Zor", "en": "⚫ Extreme"},
-    "wm.closes":       {"tr": "⏰ Seçim kapanışı", "en": "⏰ Selection closes"},
-    "wm.contract_title": {"tr": "📋 Haftalık Görev #{n}", "en": "📋 Weekly Mission #{n}"},
+    "wm.title":        {"en": "📋 Weekly Missions"},
+    "wm.week":         {"en": "Week {n} ({start} – {end})"},
+    "wm.locked":       {"en": "🔒 Mission selection is locked."},
+    "wm.no_corp":      {"en": "❌ You need a corporation first! Use `/g corpsetup`."},
+    "wm.already":      {"en": "❌ You already selected this mission."},
+    "wm.accepted":     {"en": "✅ Mission #{n} accepted! Contract posted to {channel}."},
+    "wm.easy":         {"en": "🟢 Easy"},
+    "wm.medium":       {"en": "🟡 Medium"},
+    "wm.hard":         {"en": "🔴 Hard"},
+    "wm.extreme":      {"en": "⚫ Extreme"},
+    "wm.closes":       {"en": "⏰ Selection closes"},
+    "wm.contract_title": {"en": "📋 Weekly Mission #{n}"},
 })
 
 
@@ -151,9 +151,6 @@ def _save_selection(guild_id: int, week_key: str, user_id: int, mission_id: int)
 # ── Embed builder ────────────────────────────────────────────────────────────
 
 def _build_embed(guild_id: int, missions: list[dict], week_key: str) -> discord.Embed:
-    from i18n import get_server_lang
-    lang = get_server_lang(guild_id)
-
     now = datetime.now(TZ)
     start, end = _week_bounds(now)
     iso = now.isocalendar()
@@ -180,8 +177,7 @@ def _build_embed(guild_id: int, missions: list[dict], week_key: str) -> discord.
             continue
         lines = []
         for m in tier_missions:
-            desc = m["desc_tr"] if lang == "tr" else m["desc_en"]
-            lines.append(f"**{m['id']}.** {desc}\n　　`+{m['xp']} XP` · `+{m['coins']}` {sym}")
+            lines.append(f"**{m['id']}.** {m['desc_en']}\n　　`+{m['xp']} XP` · `+{m['coins']}` {sym}")
         embed.add_field(
             name=t(guild_id, tier_key),
             value="\n".join(lines),
@@ -262,9 +258,7 @@ async def _handle_selection(interaction: discord.Interaction, week_key: str, gui
             await interaction.followup.send("❌ Corp channel not found.", ephemeral=True)
             return
 
-    from i18n import get_server_lang
-    lang = get_server_lang(guild_id)
-    desc = mission["desc_tr"] if lang == "tr" else mission["desc_en"]
+    desc = mission["desc_en"]
     sym = settings.CURRENCY_SYMBOL
 
     # Create contract in Firestore

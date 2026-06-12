@@ -32,14 +32,10 @@ _gk_channels: dict[str, set[str]] = {}
 from i18n import S
 
 S.update({
-    "gk.channel_enabled":     {"tr": "✅ Bu kanal artık bir Gene Kerman kanalıdır.",
-                               "en": "✅ This channel is now a Gene Kerman channel."},
-    "gk.channel_disabled":    {"tr": "❌ Bu kanal artık Gene Kerman kanalı değildir.",
-                               "en": "❌ This channel is no longer a Gene Kerman channel."},
-    "gk.wrong_channel":       {"tr": "⚠️ Mesajınız silindi. Gene Kerman ile yalnızca GK kanallarında etkileşime geçebilirsiniz.\n\nGK kanalları: {channels}",
-                               "en": "⚠️ Your message was deleted. You can only interact with Gene Kerman in GK channels.\n\nGK channels: {channels}"},
-    "gk.cmd_wrong_channel":   {"tr": "❌ Bu komutu yalnızca Gene Kerman kanallarında kullanabilirsiniz.\n\nGK kanalları: {channels}",
-                               "en": "❌ You can only use this command in Gene Kerman channels.\n\nGK channels: {channels}"},
+    "gk.channel_enabled":     {"en": "✅ This channel is now a Gene Kerman channel."},
+    "gk.channel_disabled":    {"en": "❌ This channel is no longer a Gene Kerman channel."},
+    "gk.wrong_channel":       {"en": "⚠️ Your message was deleted. You can only interact with Gene Kerman in GK channels.\n\nGK channels: {channels}"},
+    "gk.cmd_wrong_channel":   {"en": "❌ You can only use this command in Gene Kerman channels.\n\nGK channels: {channels}"},
 })
 
 

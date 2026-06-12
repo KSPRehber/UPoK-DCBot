@@ -158,35 +158,25 @@ Set "ksp_level" to the corresponding integer (1-15). If the screenshot does not 
 # ── i18n strings ─────────────────────────────────────────────────────────────
 
 S.update({
-    "ss.analyzing":       {"tr": "🔍 Ekran görüntüsü analiz ediliyor…",
-                           "en": "🔍 Analyzing screenshot…"},
-    "ss.no_image":        {"tr": "❌ Görüntü bulunamadı. Komutu bir ekran görüntüsünün altında kullanın veya bir görüntü ekleyin.",
-                           "en": "❌ No image found. Use this command below a screenshot or attach an image."},
-    "ss.not_approved":    {"tr": "❌ Bu bir KSP ekran görüntüsü değil.",
-                           "en": "❌ This is not a KSP screenshot."},
-    "ss.error":           {"tr": "💥 Analiz sırasında bir hata oluştu.",
-                           "en": "💥 An error occurred during analysis."},
-    "ss.no_api_key":      {"tr": "❌ Gemini API anahtarı ayarlanmamış.",
-                           "en": "❌ Gemini API key not configured."},
-    "ss.already_reviewed":{"tr": "❌ Bu ekran görüntüsü zaten analiz edildi.",
-                           "en": "❌ This screenshot has already been analyzed."},
-    "ss.not_yours":       {"tr": "❌ Yalnızca kendi gönderdiğiniz ekran görüntülerini analiz edebilirsiniz.",
-                           "en": "❌ You can only analyze screenshots that you posted."},
-    "ss.title":           {"tr": "🔭 KSP Ekran Görüntüsü Analizi",
-                           "en": "🔭 KSP Screenshot Analysis"},
-    "ss.location":        {"tr": "📍 Konum", "en": "📍 Location"},
-    "ss.situation":       {"tr": "🛰️ Durum", "en": "🛰️ Situation"},
-    "ss.craft":           {"tr": "🚀 Araç", "en": "🚀 Craft"},
-    "ss.difficulty":      {"tr": "⭐ Zorluk", "en": "⭐ Difficulty"},
-    "ss.mods":            {"tr": "🎨 Görsel Modlar", "en": "🎨 Visual Mods"},
-    "ss.phase":           {"tr": "📋 Görev Aşaması", "en": "📋 Mission Phase"},
-    "ss.crewed":          {"tr": "Mürettebatlı", "en": "Crewed"},
-    "ss.uncrewed":        {"tr": "Mürettebatsız", "en": "Uncrewed"},
-    "ss.analyzed_by":     {"tr": "Analiz: {name} tarafından",
-                           "en": "Analyzed by {name}"},
-    "ss.img_counter":     {"tr": "📸 Görüntü {n}/{total}",
-                           "en": "📸 Image {n}/{total}"},
-    "ss.reward":          {"tr": "🎁 Ödül", "en": "🎁 Reward"},
+    "ss.analyzing":       {"en": "🔍 Analyzing screenshot…"},
+    "ss.no_image":        {"en": "❌ No image found. Use this command below a screenshot or attach an image."},
+    "ss.not_approved":    {"en": "❌ This is not a KSP screenshot."},
+    "ss.error":           {"en": "💥 An error occurred during analysis."},
+    "ss.no_api_key":      {"en": "❌ Gemini API key not configured."},
+    "ss.already_reviewed":{"en": "❌ This screenshot has already been analyzed."},
+    "ss.not_yours":       {"en": "❌ You can only analyze screenshots that you posted."},
+    "ss.title":           {"en": "🔭 KSP Screenshot Analysis"},
+    "ss.location":        {"en": "📍 Location"},
+    "ss.situation":       {"en": "🛰️ Situation"},
+    "ss.craft":           {"en": "🚀 Craft"},
+    "ss.difficulty":      {"en": "⭐ Difficulty"},
+    "ss.mods":            {"en": "🎨 Visual Mods"},
+    "ss.phase":           {"en": "📋 Mission Phase"},
+    "ss.crewed":          {"en": "Crewed"},
+    "ss.uncrewed":        {"en": "Uncrewed"},
+    "ss.analyzed_by":     {"en": "Analyzed by {name}"},
+    "ss.img_counter":     {"en": "📸 Image {n}/{total}"},
+    "ss.reward":          {"en": "🎁 Reward"},
 })
 
 
@@ -201,26 +191,6 @@ def _difficulty_bar(rating: int) -> str:
     return filled * rating + "⬛" * (10 - rating)
 
 
-SITUATION_TR = {
-    "prelaunch": "Fırlatma Öncesi", "launched": "Fırlatıldı", "flying": "Uçuş",
-    "suborbital": "Altı Yörünge", "orbiting": "Yörüngede", "suborbit_reentry": "Yeniden Giriş",
-    "landed": "İniş Yapmış", "splashed": "Suya İnmiş", "escaping": "Kaçış Yörüngesi",
-    "docked": "Kenetlenmiş",
-}
-
-PHASE_TR = {
-    "ascent": "Yükseliş", "transfer": "Transfer", "orbit_insertion": "Yörünge Girişi",
-    "landing": "İniş", "surface_ops": "Yüzey Operasyonları", "return": "Dönüş",
-    "docking": "Kenetlenme", "eva": "EVA", "construction": "İnşaat",
-    "reentry": "Atmosfere Yeniden Giriş", "recovery": "Kurtarma",
-}
-
-CRAFT_TYPE_TR = {
-    "rocket": "Roket", "spaceplane": "Uzay Uçağı", "lander": "İniş Aracı",
-    "rover": "Gezici", "station": "İstasyon", "satellite": "Uydu",
-    "probe": "Sonda", "ssto": "SSTO", "shuttle": "Mekik",
-    "flag": "Bayrak", "eva": "EVA", "unknown": "Bilinmiyor",
-}
 
 
 def _build_analysis_embed(
@@ -251,10 +221,7 @@ def _build_analysis_embed(
     embed.add_field(name=t(guild_id, "ss.location"), value=loc_text, inline=True)
 
     situation_raw = loc.get("situation", "unknown")
-    from i18n import get_server_lang
-    lang = get_server_lang(guild_id)
-    situation = SITUATION_TR.get(situation_raw, situation_raw) if lang == "tr" else situation_raw
-    embed.add_field(name=t(guild_id, "ss.situation"), value=f"**{situation}**", inline=True)
+    embed.add_field(name=t(guild_id, "ss.situation"), value=f"**{situation_raw}**", inline=True)
 
     is_crewed = craft.get("crewed", False)
     crew_label = t(guild_id, "ss.crewed") if is_crewed else t(guild_id, "ss.uncrewed")
@@ -262,9 +229,8 @@ def _build_analysis_embed(
     if craft.get("crew_count_estimate"):
         crew_text += f" (×{craft['crew_count_estimate']})"
     craft_type_raw = craft.get("craft_type", "unknown")
-    craft_type = CRAFT_TYPE_TR.get(craft_type_raw, craft_type_raw) if lang == "tr" else craft_type_raw
     features = craft.get("notable_features", [])
-    craft_text = f"{crew_text}\n🔧 **{craft_type}**"
+    craft_text = f"{crew_text}\n🔧 **{craft_type_raw}**"
     if features:
         craft_text += "\n" + ", ".join(features[:3])
     embed.add_field(name=t(guild_id, "ss.craft"), value=craft_text, inline=True)
@@ -283,8 +249,7 @@ def _build_analysis_embed(
 
     phase_raw = data.get("mission_phase", "")
     if phase_raw:
-        phase = PHASE_TR.get(phase_raw, phase_raw) if lang == "tr" else phase_raw
-        embed.add_field(name=t(guild_id, "ss.phase"), value=f"**{phase}**", inline=True)
+        embed.add_field(name=t(guild_id, "ss.phase"), value=f"**{phase_raw}**", inline=True)
 
     # Rewards
     xp_reward = rating * settings.SCREENSHOT_XP_PER_DIFFICULTY
@@ -328,12 +293,7 @@ async def _extract_all_images(msg: discord.Message) -> list[tuple[str, bytes]]:
 
 async def _run_gemini(image_list: list[bytes], guild_id: int | None = None) -> dict:
     """Send one or more images to Gemini in a single call and parse the JSON response."""
-    from i18n import get_server_lang
-    lang = get_server_lang(guild_id)
-    if lang == "tr":
-        lang_instruction = "ALL text fields (description, difficulty_reason, notable_features) MUST be written in TURKISH (Türkçe). Only celestial body names and technical terms stay in English."
-    else:
-        lang_instruction = "ALL text fields (description, difficulty_reason, notable_features) must be written in English."
+    lang_instruction = "ALL text fields (description, difficulty_reason, notable_features) must be written in English."
 
     multi_note = ""
     if len(image_list) > 1:

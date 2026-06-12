@@ -2,11 +2,13 @@
 cogs/admin.py – Administrative commands (bot owner / server admins only).
 """
 
+import asyncio
 import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
 from config import cfg
+from api_auth import generate_link_code
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +118,27 @@ class Admin(commands.Cog, name="Admin"):
             f"✅ Prefix changed to `{prefix}`", ephemeral=True
         )
         log.info("%s changed prefix to '%s'", interaction.user, prefix)
+
+    # ── /linkas ───────────────────────────────────────────────────────────────
+    @app_commands.command(
+        name="linkas",
+        description="Generate a KSP link code that logs in as another user (Admin only)",
+    )
+    @app_commands.describe(target="The user whose KSP session to assume")
+    @is_admin()
+    async def linkas(self, interaction: discord.Interaction, target: discord.Member) -> None:
+        await interaction.response.defer(ephemeral=True)
+        code = await asyncio.to_thread(
+            generate_link_code, interaction.guild_id, target.id, target.display_name
+        )
+        embed = discord.Embed(
+            title="🔧 Admin KSP Link Code",
+            description=f"Linking as **{target.display_name}** (`{target.id}`).\n\nEnter this code in KSP:\n\n# `{code}`\n\n⏰ Expires in 10 minutes.",
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text=f"Issued by {interaction.user} — session will run as {target.display_name}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        log.info("%s generated admin link code for %s (%s)", interaction.user, target, target.id)
 
     # ── /mimic ────────────────────────────────────────────────────────────────
     @app_commands.command(

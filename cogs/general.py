@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import cfg
-from i18n import t, tp, get_user_lang, set_user_lang, get_server_lang, set_server_lang, LANG_NAMES
+from i18n import t, tp
 
 
 def mod_only():
@@ -55,9 +55,7 @@ class General(commands.Cog, name="General"):
         embed.add_field(
             name=_t("general.help.general"),
             value=(f"`{pfx}help` - List all available commands\n"
-                   f"`{pfx}ping` - Check the bot's latency\n"
-                   f"`{pfx}langswitch` - Toggle your personal bot language (TR/EN)\n"
-                   f"`{pfx}tsl` - Toggle server-wide bot language (TR/EN) — Mod only"),
+                   f"`{pfx}ping` - Check the bot's latency"),
             inline=False,
         )
         embed.add_field(
@@ -125,33 +123,6 @@ class General(commands.Cog, name="General"):
         latency_ms = round(self.bot.latency * 1000)
         await ctx.send(f"🏓 Pong! `{latency_ms} ms`")
 
-    # ── /langswitch (personal) ───────────────────────────────────────────────
-    @app_commands.command(name="langswitch", description="Toggle your personal bot language (TR/EN)")
-    async def langswitch(self, interaction: discord.Interaction) -> None:
-        gid = interaction.guild_id
-        uid = interaction.user.id
-        current = get_user_lang(gid, uid)
-        new_lang = "en" if current == "tr" else "tr"
-        set_user_lang(gid, uid, new_lang)
-        await interaction.response.send_message(
-            tp(gid, uid, "lang.personal.switched", lang_name=LANG_NAMES[new_lang]),
-            ephemeral=True,
-        )
-
-    # ── /tsl (server language, mod-only) ─────────────────────────────────────
-    @app_commands.command(name="tsl", description="Toggle server-wide bot language (TR/EN) — Mod only")
-    @app_commands.default_permissions(kick_members=True)
-    @mod_only()
-    async def tsl(self, interaction: discord.Interaction) -> None:
-        gid = interaction.guild_id
-        current = get_server_lang(gid)
-        new_lang = "en" if current == "tr" else "tr"
-        set_server_lang(gid, new_lang)
-        # Public message — use new server language
-        await interaction.response.send_message(
-            t(gid, "lang.server.switched", lang_name=LANG_NAMES[new_lang]),
-            ephemeral=False,
-        )
 
 
 async def setup(bot: commands.Bot) -> None:

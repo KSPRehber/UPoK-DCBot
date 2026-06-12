@@ -4,11 +4,6 @@ i18n.py – Internationalisation / translation system (two-tier).
 Two language layers:
     t(guild_id, key)            → Server language (public messages: level-ups, corp embeds, leaderboards)
     tp(guild_id, user_id, key)  → Personal language (ephemeral/private responses: rank, balance, errors)
-
-Server language:  Stored in Firestore guild doc. Changed by mods via /gk tsl.
-Personal language: Stored in Firestore user doc. Changed by anyone via /gk langswitch.
-
-Default for both: Turkish (tr).
 """
 
 import logging
@@ -20,106 +15,102 @@ log = logging.getLogger(__name__)
 _guild_langs: dict[str, str] = {}            # guild_id -> lang
 _user_langs: dict[tuple[str, str], str] = {} # (guild_id, user_id) -> lang
 
-DEFAULT_LANG = "tr"
-SUPPORTED_LANGS = ("tr", "en")
-LANG_NAMES = {"tr": "Türkçe", "en": "English"}
+DEFAULT_LANG = "en"
+SUPPORTED_LANGS = ("en",)
+LANG_NAMES = {"en": "English"}
 
 # ── Translation strings ─────────────────────────────────────────────────────
-# Format: KEY: {"tr": "...", "en": "..."}
+# Format: KEY: {"en": "..."}
 # Use {placeholders} for dynamic values.
 
 S: dict[str, dict[str, str]] = {
     # ── General ──────────────────────────────────────────────────────────────
-    "general.help.title":           {"tr": "📖 Bot Komutları", "en": "📖 Bot Commands"},
-    "general.help.desc":            {"tr": "`{pfx}<komut>` kullanarak slash komutlarını çalıştırın.", "en": "Use `{pfx}<command>` for slash commands."},
-    "general.help.general":         {"tr": "🔵 Genel", "en": "🔵 General"},
-    "general.help.info":            {"tr": "ℹ️ Bilgi", "en": "ℹ️ Info"},
-    "general.help.admin":           {"tr": "🔴 Yönetici", "en": "🔴 Admin"},
-    "general.help.mod":             {"tr": "🟠 Moderasyon", "en": "🟠 Moderation"},
-    "general.help.footer":          {"tr": "Tüm işlemler kayıt altındadır.", "en": "All actions are logged."},
-    "general.ping.title":           {"tr": "🏓 Pong!", "en": "🏓 Pong!"},
-    "general.ping.latency":         {"tr": "**Gecikme:** `{ms} ms`", "en": "**Latency:** `{ms} ms`"},
+    "general.help.title":           {"en": "📖 Bot Commands"},
+    "general.help.desc":            {"en": "Use `{pfx}<command>` for slash commands."},
+    "general.help.general":         {"en": "🔵 General"},
+    "general.help.info":            {"en": "ℹ️ Info"},
+    "general.help.admin":           {"en": "🔴 Admin"},
+    "general.help.mod":             {"en": "🟠 Moderation"},
+    "general.help.footer":          {"en": "All actions are logged."},
+    "general.ping.title":           {"en": "🏓 Pong!"},
+    "general.ping.latency":         {"en": "**Latency:** `{ms} ms`"},
 
     # ── XP ───────────────────────────────────────────────────────────────────
-    "xp.level_up.title":            {"tr": "🚀 Seviye Atladı!", "en": "🚀 Level Up!"},
-    "xp.level_up.desc":             {"tr": "**{user}** **Seviye {level}**'e ulaştı!\nToplam XP: `{xp}` · Sonraki seviye: `{next_xp}` XP\n{symbol} **+{reward} {currency}** (Bakiye: `{balance}`)", "en": "**{user}** reached **Level {level}**!\nTotal XP: `{xp}` · Next level: `{next_xp}` XP\n{symbol} **+{reward} {currency}** (Balance: `{balance}`)"},
-    "xp.rank.title":                {"tr": "📊 {name} — Sıralama", "en": "📊 {name}'s Rank"},
-    "xp.rank.level":                {"tr": "Seviye", "en": "Level"},
-    "xp.rank.rank":                 {"tr": "Sıra", "en": "Rank"},
-    "xp.rank.progress":             {"tr": "İlerleme", "en": "Progress"},
-    "xp.rank.messages":             {"tr": "Mesajlar", "en": "Messages"},
-    "xp.lb.title":                  {"tr": "🏆 XP Sıralaması", "en": "🏆 XP Leaderboard"},
-    "xp.lb.empty":                  {"tr": "Henüz veri yok — sohbet etmeye başlayın!", "en": "No data yet — start chatting!"},
-    "xp.setxp.done":                {"tr": "✅ **{name}** XP'si `{xp}` olarak ayarlandı (Seviye {level})", "en": "✅ Set **{name}**'s XP to `{xp}` (Level {level})"},
+    "xp.level_up.title":            {"en": "🚀 Level Up!"},
+    "xp.level_up.desc":             {"en": "**{user}** reached **Level {level}**!\nTotal XP: `{xp}` · Next level: `{next_xp}` XP\n{symbol} **+{reward} {currency}** (Balance: `{balance}`)"},
+    "xp.rank.title":                {"en": "📊 {name}'s Rank"},
+    "xp.rank.level":                {"en": "Level"},
+    "xp.rank.rank":                 {"en": "Rank"},
+    "xp.rank.progress":             {"en": "Progress"},
+    "xp.rank.messages":             {"en": "Messages"},
+    "xp.lb.title":                  {"en": "🏆 XP Leaderboard"},
+    "xp.lb.empty":                  {"en": "No data yet — start chatting!"},
+    "xp.setxp.done":                {"en": "✅ Set **{name}**'s XP to `{xp}` (Level {level})"},
 
     # ── Economy ──────────────────────────────────────────────────────────────
-    "eco.balance.title":            {"tr": "{symbol} {name} — Bakiye", "en": "{symbol} {name}'s Balance"},
-    "eco.balance.footer":           {"tr": "Seviye atlayarak {currency} kazanın!", "en": "Earn {currency} by leveling up!"},
-    "eco.pay.cant_bot":             {"tr": "❌ Bir bota ödeme yapamazsınız.", "en": "❌ You can't pay a bot."},
-    "eco.pay.cant_self":            {"tr": "❌ Kendinize ödeme yapamazsınız.", "en": "❌ You can't pay yourself."},
-    "eco.pay.min":                  {"tr": "❌ Minimum transfer: **{min}** {currency}.", "en": "❌ Minimum transfer is **{min}** {currency}."},
-    "eco.pay.insufficient":         {"tr": "❌ Yetersiz bakiye. Bakiyeniz: **{balance}** {currency}.", "en": "❌ Insufficient funds. You have **{balance}** {currency}."},
-    "eco.pay.title":                {"tr": "{symbol} Transfer Tamamlandı", "en": "{symbol} Transfer Complete"},
-    "eco.pay.desc":                 {"tr": "**{sender}** → **{receiver}**\nMiktar: **{amount}** {currency}", "en": "**{sender}** → **{receiver}**\nAmount: **{amount}** {currency}"},
-    "eco.richest.title":            {"tr": "{symbol} En Zenginler", "en": "{symbol} Richest Members"},
-    "eco.richest.empty":            {"tr": "Henüz kimsenin KCoin'i yok!", "en": "Nobody has any KCoins yet!"},
-    "eco.give.title":               {"tr": "{symbol} Para Verildi", "en": "{symbol} Funds Granted"},
-    "eco.give.desc":                {"tr": "**{name}** **{amount}** {currency} aldı\n📝 Sebep: {reason}\nYeni bakiye: `{balance}`", "en": "**{name}** received **{amount}** {currency}\n📝 Reason: {reason}\nNew balance: `{balance}`"},
-    "eco.fine.title":               {"tr": "⚖️ Ceza Kesildi", "en": "⚖️ Fine Issued"},
-    "eco.fine.desc":                {"tr": "**{name}** **{amount}** {currency} ceza aldı\n📝 Sebep: {reason}\nYeni bakiye: `{balance}`", "en": "**{name}** was fined **{amount}** {currency}\n📝 Reason: {reason}\nNew balance: `{balance}`"},
-    "eco.fine.dm":                  {"tr": "⚖️ **{guild}** sunucusunda **{amount} {currency}** ceza aldınız.\n**Sebep:** {reason}", "en": "⚖️ You were fined **{amount} {currency}** in **{guild}**.\n**Reason:** {reason}"},
-    "eco.setbal.done":              {"tr": "✅ **{name}** bakiyesi **{amount}** {currency} olarak ayarlandı", "en": "✅ Set **{name}**'s balance to **{amount}** {currency}"},
+    "eco.balance.title":            {"en": "{symbol} {name}'s Balance"},
+    "eco.balance.footer":           {"en": "Earn {currency} by leveling up!"},
+    "eco.pay.cant_bot":             {"en": "❌ You can't pay a bot."},
+    "eco.pay.cant_self":            {"en": "❌ You can't pay yourself."},
+    "eco.pay.min":                  {"en": "❌ Minimum transfer is **{min}** {currency}."},
+    "eco.pay.insufficient":         {"en": "❌ Insufficient funds. You have **{balance}** {currency}."},
+    "eco.pay.title":                {"en": "{symbol} Transfer Complete"},
+    "eco.pay.desc":                 {"en": "**{sender}** → **{receiver}**\nAmount: **{amount}** {currency}"},
+    "eco.richest.title":            {"en": "{symbol} Richest Members"},
+    "eco.richest.empty":            {"en": "Nobody has any KCoins yet!"},
+    "eco.give.title":               {"en": "{symbol} Funds Granted"},
+    "eco.give.desc":                {"en": "**{name}** received **{amount}** {currency}\n📝 Reason: {reason}\nNew balance: `{balance}`"},
+    "eco.fine.title":               {"en": "⚖️ Fine Issued"},
+    "eco.fine.desc":                {"en": "**{name}** was fined **{amount}** {currency}\n📝 Reason: {reason}\nNew balance: `{balance}`"},
+    "eco.fine.dm":                  {"en": "⚖️ You were fined **{amount} {currency}** in **{guild}**.\n**Reason:** {reason}"},
+    "eco.setbal.done":              {"en": "✅ Set **{name}**'s balance to **{amount}** {currency}"},
 
     # ── Corps ────────────────────────────────────────────────────────────────
-    "corps.setup.title":            {"tr": "🏢 {name}", "en": "🏢 {name}"},
-    "corps.setup.desc":             {"tr": "Şirket merkezinize hoş geldiniz!", "en": "Welcome to your corporation headquarters!"},
-    "corps.setup.founder":          {"tr": "Kurucu", "en": "Founder"},
-    "corps.setup.established":      {"tr": "Kuruluş Tarihi", "en": "Established"},
-    "corps.setup.done":             {"tr": "🏢 **{name}** şirketi kuruldu! {channel} kanalına gidin", "en": "🏢 Corporation **{name}** established! Head over to {channel}"},
-    "corps.replace.title":          {"tr": "⚠️ Şirket Zaten Mevcut", "en": "⚠️ Corporation Already Exists"},
-    "corps.replace.desc":           {"tr": "**{guild}** sunucusunda zaten **{old}** şirketine sahipsiniz.\n\nDeğiştirmek eski kanalı (<#{channel}>) **silecek** ve **{new}** adında yeni bir tane oluşturacak.\n\nDevam etmek istiyor musunuz?", "en": "You already own **{old}** in **{guild}**.\n\nReplacing it will **delete** the old channel (<#{channel}>) and create a new one called **{new}**.\n\nDo you want to proceed?"},
-    "corps.replace.btn_confirm":    {"tr": "Şirketi Değiştir", "en": "Replace Corporation"},
-    "corps.replace.btn_cancel":     {"tr": "İptal", "en": "Cancel"},
-    "corps.replace.confirming":     {"tr": "✅ Şirketiniz değiştiriliyor…", "en": "✅ Replacing your corporation…"},
-    "corps.replace.cancelled":      {"tr": "❌ Şirket değişikliği iptal edildi.", "en": "❌ Corporation replacement cancelled."},
-    "corps.replace.check_dm":       {"tr": "📩 Zaten bir şirketiniz var. Değiştirme seçenekleri için DM'lerinizi kontrol edin.", "en": "📩 You already have a corporation. Check your DMs for replacement options."},
-    "corps.replace.no_dm":          {"tr": "❌ Size DM atamıyorum. Lütfen sunucu üyelerinden DM'leri etkinleştirin ve tekrar deneyin.", "en": "❌ I can't DM you. Please enable DMs from server members and try again."},
-    "corps.replace.done":           {"tr": "✅ **{name}** şirketi **{guild}** sunucusunda kuruldu! <#{channel}> kanalına göz atın", "en": "✅ Corporation **{name}** has been established in **{guild}**! Check out <#{channel}>"},
+    "corps.setup.title":            {"en": "🏢 {name}"},
+    "corps.setup.desc":             {"en": "Welcome to your corporation headquarters!"},
+    "corps.setup.founder":          {"en": "Founder"},
+    "corps.setup.established":      {"en": "Established"},
+    "corps.setup.done":             {"en": "🏢 Corporation **{name}** established! Head over to {channel}"},
+    "corps.replace.title":          {"en": "⚠️ Corporation Already Exists"},
+    "corps.replace.desc":           {"en": "You already own **{old}** in **{guild}**.\n\nReplacing it will **delete** the old channel (<#{channel}>) and create a new one called **{new}**.\n\nDo you want to proceed?"},
+    "corps.replace.btn_confirm":    {"en": "Replace Corporation"},
+    "corps.replace.btn_cancel":     {"en": "Cancel"},
+    "corps.replace.confirming":     {"en": "✅ Replacing your corporation…"},
+    "corps.replace.cancelled":      {"en": "❌ Corporation replacement cancelled."},
+    "corps.replace.check_dm":       {"en": "📩 You already have a corporation. Check your DMs for replacement options."},
+    "corps.replace.no_dm":          {"en": "❌ I can't DM you. Please enable DMs from server members and try again."},
+    "corps.replace.done":           {"en": "✅ Corporation **{name}** has been established in **{guild}**! Check out <#{channel}>"},
 
     # ── Roles ────────────────────────────────────────────────────────────────
-    "roles.select_placeholder":     {"tr": "Kuşanılacak KSP Unvanlarını seçin...", "en": "Select KSP Titles to equip..."},
-    "roles.none_unlocked":          {"tr": "Hiçbiri açılmadı", "en": "None unlocked"},
-    "roles.no_titles":              {"tr": "Henüz hiçbir unvan açmadınız.", "en": "No titles unlocked yet."},
-    "roles.invalid_selection":      {"tr": "❌ Henüz açmadığınız bir seviyeyi seçtiniz.", "en": "❌ You selected a level you haven't unlocked."},
-    "roles.updated":                {"tr": "✅ Roller güncellendi! **{count}** unvan kuşandınız.", "en": "✅ Roles updated! Equipped **{count}** title(s)."},
-    "roles.cmd_no_unlocked":        {"tr": "❌ Henüz hiçbir KSP unvanı açmadınız. Kazanmak için görevleri tamamlayın veya ekran görüntüsü yükleyin!", "en": "❌ You have not unlocked any KSP titles yet. Complete missions or upload screenshots to earn them!"},
-    "roles.embed_title":            {"tr": "🎖️ KSP Unvan Seçici", "en": "🎖️ KSP Title Selector"},
-    "roles.embed_desc":             {"tr": "Profilinizde sergilemek istediğiniz KSP başarı unvanlarını seçin. Birden fazla unvan kuşanabilirsiniz!", "en": "Select which KSP achievement titles you want to display on your profile. You can equip multiple titles!"},
-    "roles.check_dm":               {"tr": "✅ Unvan seçici için DM kutunuzu kontrol edin!", "en": "✅ Check your DMs for the title selector!"},
-    "roles.no_dm":                  {"tr": "❌ Size DM gönderemiyorum. Lütfen sunucu üyelerinden mesajları aktif hale getirin.", "en": "❌ I cannot send you a DM. Please enable direct messages from server members."},
-    "roles.unlocked_title":         {"tr": "🎉 Yeni KSP Başarısı Kazanıldı!", "en": "🎉 New KSP Achievement Unlocked!"},
-    "roles.unlocked_desc":          {"tr": "Tebrikler! **{title_name}** (`{desc}`) unvanını elde ettiniz.\n\nAşağıdaki menüyü kullanarak bu unvanı sunucuda kuşanabilirsiniz. Aynı anda birden fazla unvan sergileyebilirsiniz!", "en": "Congratulations! You've achieved **{title_name}** (`{desc}`).\n\nYou can now equip this title in the server using the menu below. You can display multiple titles at once!"},
-    "roles.mod_remove_all":         {"tr": "TÜM Seviyeleri Kaldır", "en": "Remove ALL Levels"},
-    "roles.mod_remove_all_desc":    {"tr": "Bu kullanıcının tüm seviye unvanlarını geri al", "en": "Revoke all level titles from this user"},
-    "roles.mod_level_name":         {"tr": "Seviye {lvl}: {name}", "en": "Level {lvl}: {name}"},
-    "roles.mod_select_placeholder": {"tr": "{name} kullanıcısından kaldırılacak seviyeleri seçin...", "en": "Select level(s) to remove from {name}..."},
-    "roles.mod_no_perms":           {"tr": "❌ Veritabanı güncellendi ancak Discord rollerini kaldırma yetkim yok.", "en": "❌ Database updated, but I lack permissions to remove Discord roles."},
-    "roles.mod_success":            {"tr": "✅ {user} adlı kullanıcıdan **{count}** seviye başarıyla kaldırıldı.", "en": "✅ Successfully removed **{count}** level(s) from {user}."},
-    "roles.mod_no_unlocked":        {"tr": "❌ {user} kullanıcısının açılmış hiçbir KSP seviye rolü bulunmuyor.", "en": "❌ {user} does not have any KSP level roles unlocked."},
-    "roles.mod_embed_title":        {"tr": "🛠️ Mod Rol Kaldırma", "en": "🛠️ Mod Role Removal"},
-    "roles.mod_embed_desc":         {"tr": "{user} kullanıcısından kaldırılacak KSP seviyelerini seçin.\nBelirli seviyeleri seçebilir veya **TÜM Seviyeleri Kaldır** diyebilirsiniz.", "en": "Select the KSP levels to remove from {user}.\nYou can select specific levels, or choose **Remove ALL Levels**."},
-
-    # ── Language ─────────────────────────────────────────────────────────────
-    "lang.personal.switched":       {"tr": "🌐 Kişisel diliniz **{lang_name}** olarak ayarlandı.", "en": "🌐 Your personal language set to **{lang_name}**."},
-    "lang.server.switched":         {"tr": "🌐 Sunucu dili **{lang_name}** olarak ayarlandı.", "en": "🌐 Server language set to **{lang_name}**."},
+    "roles.select_placeholder":     {"en": "Select KSP Titles to equip..."},
+    "roles.none_unlocked":          {"en": "None unlocked"},
+    "roles.no_titles":              {"en": "No titles unlocked yet."},
+    "roles.invalid_selection":      {"en": "❌ You selected a level you haven't unlocked."},
+    "roles.updated":                {"en": "✅ Roles updated! Equipped **{count}** title(s)."},
+    "roles.cmd_no_unlocked":        {"en": "❌ You have not unlocked any KSP titles yet. Complete missions or upload screenshots to earn them!"},
+    "roles.embed_title":            {"en": "🎖️ KSP Title Selector"},
+    "roles.embed_desc":             {"en": "Select which KSP achievement titles you want to display on your profile. You can equip multiple titles!"},
+    "roles.check_dm":               {"en": "✅ Check your DMs for the title selector!"},
+    "roles.no_dm":                  {"en": "❌ I cannot send you a DM. Please enable direct messages from server members."},
+    "roles.unlocked_title":         {"en": "🎉 New KSP Achievement Unlocked!"},
+    "roles.unlocked_desc":          {"en": "Congratulations! You've achieved **{title_name}** (`{desc}`).\n\nYou can now equip this title in the server using the menu below. You can display multiple titles at once!"},
+    "roles.mod_remove_all":         {"en": "Remove ALL Levels"},
+    "roles.mod_remove_all_desc":    {"en": "Revoke all level titles from this user"},
+    "roles.mod_level_name":         {"en": "Level {lvl}: {name}"},
+    "roles.mod_select_placeholder": {"en": "Select level(s) to remove from {name}..."},
+    "roles.mod_no_perms":           {"en": "❌ Database updated, but I lack permissions to remove Discord roles."},
+    "roles.mod_success":            {"en": "✅ Successfully removed **{count}** level(s) from {user}."},
+    "roles.mod_no_unlocked":        {"en": "❌ {user} does not have any KSP level roles unlocked."},
+    "roles.mod_embed_title":        {"en": "🛠️ Mod Role Removal"},
+    "roles.mod_embed_desc":         {"en": "Select the KSP levels to remove from {user}.\nYou can select specific levels, or choose **Remove ALL Levels**."},
 
     # ── Common ───────────────────────────────────────────────────────────────
-    "common.no_perm":               {"tr": "❌ Bu komutu kullanma yetkiniz yok.", "en": "❌ You don't have permission to use this command."},
-    "common.error":                 {"tr": "💥 Bir hata oluştu.", "en": "💥 An error occurred."},
-    "common.amount_positive":       {"tr": "❌ Miktar pozitif olmalıdır.", "en": "❌ Amount must be positive."},
-    "common.amount_negative":       {"tr": "❌ Bakiye negatif olamaz.", "en": "❌ Balance can't be negative."},
-    "common.server_only":           {"tr": "❌ Bu komut sadece sunucularda kullanılabilir.", "en": "❌ This command can only be used in a server."},
-    "common.issued_by":             {"tr": "Yetkili: {name}", "en": "Issued by {name}"},
+    "common.no_perm":               {"en": "❌ You don't have permission to use this command."},
+    "common.error":                 {"en": "💥 An error occurred."},
+    "common.amount_positive":       {"en": "❌ Amount must be positive."},
+    "common.amount_negative":       {"en": "❌ Balance can't be negative."},
+    "common.server_only":           {"en": "❌ This command can only be used in a server."},
+    "common.issued_by":             {"en": "Issued by {name}"},
 }
 
 
