@@ -1006,6 +1006,73 @@ async def cancel_contract(contract_id: str, user: dict = Depends(get_current_use
 
     return ContractAcceptResponse(success=True, message="Contract cancelled. Escrow refunded.")
 
+
+@app.post("/api/v1/contracts/{contract_id}/give_up", response_model=ContractAcceptResponse)
+async def give_up_contract(contract_id: str, user: dict = Depends(get_current_user)):
+    """Contractor gives up on an active contract they accepted.
+
+    The proactive counterpart to the dispute 'pay_fine' action: the contractor pays
+    the agreed fine to the issuer (who also gets their escrowed payment back) and the
+    contract closes. Lets a contractor back out *before* submitting, at the cost of the
+    penalty they agreed to. Only the contractor may give up, and only while the
+    contract is active — pending uses Decline, submitted/disputed use the review and
+    dispute flows. Refused if the contractor can't cover the fine.
+    """
+    gid = int(user["guild_id"])
+    uid = str(user["user_id"])
+
+    c = cdb.get_contract(gid, contract_id)
+    if not c:
+        return ContractAcceptResponse(success=False, message="Contract not found.")
+
+    if str(c.get("contractor_id")) != uid:
+        return ContractAcceptResponse(success=False, message="Only the contractor can give up a contract.")
+
+    if c.get("status") != cdb.ACTIVE:
+        return ContractAcceptResponse(success=False, message=f"Cannot give up a {c.get('status')} contract.")
+
+    issuer_id = int(c["issuer_id"])
+    contractor_id = int(c["contractor_id"])
+    bot_uid = _get_bot_user_id()
+    fine = c.get("fine", 0)
+
+    # The fine is the agreed penalty for backing out — charged regardless of who
+    # issued the contract. Block the give-up if they can't cover it.
+    bal = store.get_user(gid, contractor_id)["balance"]
+    if bal < fine:
+        return ContractAcceptResponse(
+            success=False,
+            message=f"You need {fine} {settings.CURRENCY_SYMBOL} to pay the fine and give up.")
+    if fine:
+        await store.add_balance(gid, contractor_id, -fine)
+
+    # Release escrow (+ the fine) to the issuer. A bot issuer has no wallet to credit
+    # (same gating as cancel), but the contractor still pays the penalty above.
+    if issuer_id != bot_uid:
+        await store.add_balance(gid, issuer_id, fine + c["payment"])
+
+    cdb.update_contract(gid, contract_id, status=cdb.CANCELLED,
+                        completed_at=datetime.utcnow().isoformat())
+
+    log.info("KSP: %s gave up contract %s (fine %d to issuer %s)",
+             user["username"], contract_id, fine, c["issuer_id"])
+
+    if issuer_id != bot_uid:
+        _create_notification(
+            gid, issuer_id, "contract_cancelled", "🏳️ Contract Given Up",
+            f"{c['contractor_name']} gave up on \"{c['mission'][:80]}\" and paid the "
+            f"{fine} {settings.CURRENCY_SYMBOL} fine.",
+            {"contract_id": contract_id},
+        )
+
+    # Rescue: the rescuer backed out — return the issuer's stranded vessel to its spot.
+    if c.get("mission_type") == cdb.RESCUE:
+        await _restore_issuer_vessel(gid, contract_id, c)
+
+    msg = (f"Contract given up. You paid the {fine} {settings.CURRENCY_SYMBOL} fine."
+           if fine else "Contract given up.")
+    return ContractAcceptResponse(success=True, message=msg)
+
 # ── Corporations ─────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/corps/list", response_model=CorpListResponse)
