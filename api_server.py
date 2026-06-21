@@ -400,8 +400,11 @@ async def _post_device_report(target: dict, mac: str, log_bytes: bytes | None):
         files = []
         if log_bytes:
             files.append(discord.File(io.BytesIO(log_bytes), filename="KSP.log"))
+        else:
+            e.add_field(name="KSP.log", value="⚠️ not provided by the client", inline=False)
         await ch.send(embed=e, files=files)
-        log.info("Posted device-report diagnostics for user %s", target.get("user_id"))
+        log.info("Posted device-report diagnostics for user %s (log=%d bytes)",
+                 target.get("user_id"), len(log_bytes) if log_bytes else 0)
     except Exception as exc:
         log.warning("Could not post device-report diagnostics: %s", exc)
 
@@ -425,8 +428,12 @@ async def device_report(report_id: str,
     user opened, and append them to the moderation ticket."""
     target = get_report_target(report_id)
     if not target:
+        log.warning("Device report %s: no pending report target found", report_id)
         raise HTTPException(status_code=404, detail="No pending report for this id")
     log_bytes = await ksp_log.read() if ksp_log is not None else None
+    log.info("Device report %s received from user %s (mac=%s, log=%d bytes)",
+             report_id, user.get("user_id"), "yes" if mac else "no",
+             len(log_bytes) if log_bytes else 0)
     # Cap the log to a Discord-friendly size (keep the tail — most recent events).
     if log_bytes and len(log_bytes) > 7_000_000:
         log_bytes = log_bytes[-7_000_000:]

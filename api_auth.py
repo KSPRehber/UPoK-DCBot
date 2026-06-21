@@ -393,11 +393,18 @@ def poll_device_challenge(challenge_id: str) -> dict:
 
 def get_report_target(report_id: str) -> dict | None:
     """Find a denied challenge still awaiting its diagnostics upload."""
-    for doc in _device_chal_col().where("report_id", "==", report_id).limit(1).stream():
-        d = doc.to_dict()
-        if d.get("report_requested") and not d.get("report_done"):
-            d["_doc_id"] = doc.id
-            return d
+    if not report_id:
+        return None
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        q = _device_chal_col().where(filter=FieldFilter("report_id", "==", report_id)).limit(1)
+        for doc in q.stream():
+            d = doc.to_dict()
+            if d.get("report_requested") and not d.get("report_done"):
+                d["_doc_id"] = doc.id
+                return d
+    except Exception as exc:
+        log.warning("get_report_target(%s) failed: %s", report_id, exc)
     return None
 
 

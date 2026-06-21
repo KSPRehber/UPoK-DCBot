@@ -14,6 +14,7 @@ Doing it on every restart will hit Discord's rate limit.
 import asyncio
 import logging
 import sys
+import threading
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -317,26 +318,33 @@ class GeneKermanBot(commands.Bot):
 # ── Runner ───────────────────────────────────────────────────────────────────
 async def main() -> None:
     bot = GeneKermanBot()
-    
-    async def console_listener():
-        loop = asyncio.get_running_loop()
-        while True:
-            line = await loop.run_in_executor(None, sys.stdin.readline)
-            if not line:
-                break
-            if line.strip().lower() == "stop":
+    loop = asyncio.get_running_loop()
+
+    def console_reader():
+        """Read console commands on a daemon thread.
+
+        Deliberately NOT loop.run_in_executor: sys.stdin.readline blocks until
+        input, and a blocked default-executor thread would stall asyncio.run()'s
+        shutdown_default_executor() forever whenever the bot is closed any other
+        way (e.g. the /shutdown command). A daemon thread never blocks exit.
+        """
+        for line in sys.stdin:
+            cmd = line.strip().lower()
+            if cmd == "stop":
                 log.info("Stop command received from console. Shutting down...")
-                await bot.close()
-                break
-            elif line.strip().lower() == "extlog":
+                asyncio.run_coroutine_threadsafe(bot.close(), loop)
+                return
+            elif cmd == "extlog":
                 bot.extlog_enabled = not getattr(bot, "extlog_enabled", False)
                 state = "ON" if bot.extlog_enabled else "OFF"
                 print(f"[ExtLog] Extensive logging is now {state}")
                 log.info("Extensive logging is now %s", state)
 
-    async with bot:
-        asyncio.create_task(console_listener())
+    threading.Thread(target=console_reader, name="console", daemon=True).start()
 
+    api_server = None
+
+    async with bot:
         # Start KSP API server alongside the bot
         if cfg.KSP_API_ENABLED:
             import uvicorn
@@ -367,7 +375,13 @@ async def main() -> None:
         else:
             log.info("KSP API server: DISABLED (KSP_API_ENABLED=false)")
 
-        await bot.start(cfg.TOKEN)
+        try:
+            await bot.start(cfg.TOKEN)
+        finally:
+            # Bot has stopped — tell uvicorn to leave its serve loop so the process
+            # can actually terminate instead of hanging on a live server task.
+            if api_server is not None:
+                api_server.should_exit = True
 
 
 if __name__ == "__main__":
