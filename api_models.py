@@ -27,6 +27,13 @@ class LinkResponse(BaseModel):
     user_id: str = ""
     challenge_id: Optional[str] = None
 
+class DeviceStatusResponse(BaseModel):
+    # status: "pending" (keep polling) | "approved" (device trusted, resume) |
+    #         "denied" (rejected) | "expired". On a denied report awaiting client
+    #         diagnostics, report_id is set so the client uploads MAC + KSP.log.
+    status: str = "pending"
+    report_id: Optional[str] = None
+
 class AuthError(BaseModel):
     detail: str
 

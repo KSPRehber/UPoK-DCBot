@@ -27,9 +27,11 @@ from config import cfg
 from api_auth import (
     validate_link_code, create_session_token, verify_session_token,
     logout_all_devices, create_approval_challenge, resolve_approval, poll_approval,
+    add_allowed_device, check_device, create_device_challenge,
+    poll_device_challenge, get_report_target, mark_report_done,
 )
 from api_models import (
-    LinkRequest, LinkResponse, PollRequest,
+    LinkRequest, LinkResponse, PollRequest, DeviceStatusResponse,
     UserProfile,
     WeeklyMissionsResponse, Mission, MissionSelectRequest, MissionSelectResponse,
     ContractSummary, ContractListResponse, ContractAcceptResponse,
@@ -201,27 +203,55 @@ def _guard_link_attempt(request: Request):
     _rate_limit("link:global", max_hits=60, window=60.0)   # 60 / min overall
 
 
-async def get_current_user(authorization: str = Header(...)) -> dict:
-    """Extract and validate the session token from Authorization header."""
+async def get_user_token_only(authorization: str = Header(...)) -> dict:
+    """Validate just the session token (no device gate). Used by the device-
+    approval poll / report endpoints, which a blocked device must still reach."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
-
-    token = authorization[7:]
-    user = verify_session_token(token, _get_api_secret())
+    user = verify_session_token(authorization[7:], _get_api_secret())
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return user
+
+
+async def get_current_user(request: Request,
+                           authorization: str = Header(...),
+                           x_device_id: str = Header(default="", alias="X-Device-Id")) -> dict:
+    """Validate the session token, then enforce device binding (hard block).
+
+    An unrecognized device id is refused with 403 `device_unverified` and a
+    challenge_id; the user is DMed an approve/reject prompt and the client polls
+    /auth/device/poll until trusted.
+    """
+    user = await get_user_token_only(authorization)
+
+    if cfg.KSP_DEVICE_BINDING_ENABLED and check_device(user["user_id"], x_device_id) != "ok":
+        client_ip = _client_ip(request)
+        challenge_id, created = create_device_challenge(
+            user["guild_id"], user["user_id"], user["username"], x_device_id, client_ip)
+        if created:
+            await _dm_device_approval(int(user["user_id"]), challenge_id, x_device_id, client_ip)
+        raise HTTPException(status_code=403, detail={
+            "code": "device_unverified",
+            "challenge_id": challenge_id,
+            "message": "A new device is using your account. Approve it from your Discord DM.",
+        })
 
     return user
 
 
 # ── Auth Endpoints ───────────────────────────────────────────────────────────
 
-def _issue_link_token(result: dict) -> LinkResponse:
-    """Mint a session token for a validated identity and return the linked response."""
+def _issue_link_token(result: dict, device_id: str = "") -> LinkResponse:
+    """Mint a session token for a validated identity and return the linked response.
+    The linking device (if it sent one) is trusted automatically, since it just
+    completed the full link + login-approval flow."""
     token = create_session_token(
         result["guild_id"], result["user_id"], result["username"],
         _get_api_secret(),
     )
+    if device_id:
+        add_allowed_device(result["user_id"], device_id)
     return LinkResponse(
         status="ok",
         token=token,
@@ -261,7 +291,8 @@ async def _dm_login_approval(user_id: int, challenge_id: str, client_ip: str) ->
 
 
 @app.post("/api/v1/auth/link", response_model=LinkResponse)
-async def auth_link(req: LinkRequest, request: Request):
+async def auth_link(req: LinkRequest, request: Request,
+                    x_device_id: str = Header(default="", alias="X-Device-Id")):
     """Exchange a 6-digit link code for a session token (or a login-approval challenge)."""
     _guard_link_attempt(request)
 
@@ -269,9 +300,9 @@ async def auth_link(req: LinkRequest, request: Request):
     if result is None:
         raise HTTPException(status_code=400, detail="Invalid or expired link code")
 
-    # Approval off → link immediately.
+    # Approval off → link immediately (trusting the linking device).
     if not cfg.KSP_2FA_ENABLED:
-        return _issue_link_token(result)
+        return _issue_link_token(result, x_device_id)
 
     # Approval on → DM the user a Log-in button and wait for them to poll. The link
     # code is already consumed, so a failed DM means this attempt can't proceed.
@@ -291,7 +322,8 @@ async def auth_link(req: LinkRequest, request: Request):
 
 
 @app.post("/api/v1/auth/link/poll", response_model=LinkResponse)
-async def auth_link_poll(req: PollRequest, request: Request):
+async def auth_link_poll(req: PollRequest, request: Request,
+                         x_device_id: str = Header(default="", alias="X-Device-Id")):
     """Poll a login-approval challenge. Returns the token once the user has pressed
     Log-in in Discord; tells the client to keep waiting until then."""
     # Polling is frequent and the challenge_id is unguessable (144-bit), so the
@@ -303,10 +335,104 @@ async def auth_link_poll(req: PollRequest, request: Request):
         return LinkResponse(status="pending")
     if state["state"] == "approved":
         log.info("KSP: login approved, linking %s", state["username"])
-        return _issue_link_token(state)
+        return _issue_link_token(state, x_device_id)
     if state["state"] == "denied":
         raise HTTPException(status_code=403, detail="Login request was denied.")
     raise HTTPException(status_code=400, detail="Login request expired. Request a new link code.")
+
+
+# ── Device binding ───────────────────────────────────────────────────────────
+
+async def _dm_device_approval(user_id: int, challenge_id: str,
+                              device_id: str, client_ip: str) -> bool:
+    """DM the user a 'new device' approval prompt with Yes-it's-me / report buttons."""
+    if not _bot_instance:
+        return False
+    try:
+        import discord
+        from cogs.ksp_bridge import DeviceApprovalView
+        u = await _bot_instance.fetch_user(user_id)
+        when = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
+        e = discord.Embed(
+            title="🖥️ New device on your account",
+            description=(
+                "A KSP client on a device we don't recognize is trying to use your "
+                "account. It's blocked until you decide.\n\n"
+                f"**When:** {when}\n**From IP:** `{client_ip or 'unknown'}`\n\n"
+                "**Did you just switch PCs, reinstall, or clear the mod's files?**\n"
+                "→ Press **✅ Yes, it's me** to trust this device.\n\n"
+                "If this wasn't you, someone may be using your account. Press "
+                "**🚫 No — report** to alert the moderators.\n\n"
+                "⚠️ Try **✅ Yes, it's me** first if you changed anything yourself — "
+                "only report if you're sure it wasn't you."
+            ),
+            color=discord.Color.orange(),
+        )
+        await u.send(embed=e, view=DeviceApprovalView(challenge_id))
+        return True
+    except Exception as exc:
+        log.warning("Could not DM device approval to user %s: %s", user_id, exc)
+        return False
+
+
+async def _post_device_report(target: dict, mac: str, log_bytes: bytes | None):
+    """Post the enriched moderation ticket (MAC + KSP.log) for a reported device.
+    The base ticket was already posted when the user pressed 'report'; this adds
+    the diagnostics the offending client uploaded."""
+    if not _bot_instance:
+        return
+    ch_id = settings.CONTRACT_MOD_CHANNEL_ID
+    if not ch_id:
+        return
+    try:
+        import discord
+        ch = _bot_instance.get_channel(ch_id) or await _bot_instance.fetch_channel(ch_id)
+        e = discord.Embed(
+            title="📎 Device report — client diagnostics",
+            description=(
+                f"**User:** {target.get('username')} (`{target.get('user_id')}`)\n"
+                f"**Device id:** `{target.get('device_id')}`\n"
+                f"**IP:** `{target.get('client_ip') or 'unknown'}`\n"
+                f"**MAC:** `{mac or 'not provided'}`"
+            ),
+            color=discord.Color.red(),
+        )
+        files = []
+        if log_bytes:
+            files.append(discord.File(io.BytesIO(log_bytes), filename="KSP.log"))
+        await ch.send(embed=e, files=files)
+        log.info("Posted device-report diagnostics for user %s", target.get("user_id"))
+    except Exception as exc:
+        log.warning("Could not post device-report diagnostics: %s", exc)
+
+
+@app.post("/api/v1/auth/device/poll", response_model=DeviceStatusResponse)
+async def auth_device_poll(req: PollRequest, request: Request,
+                           user: dict = Depends(get_user_token_only)):
+    """Poll a device-approval challenge from a blocked client (token-only auth so
+    the block itself doesn't deadlock the poll)."""
+    _rate_limit(f"devpoll:{_client_ip(request)}", max_hits=120, window=60.0)
+    state = poll_device_challenge(req.challenge_id)
+    return DeviceStatusResponse(status=state["state"], report_id=state.get("report_id"))
+
+
+@app.post("/api/v1/device/report/{report_id}")
+async def device_report(report_id: str,
+                        mac: str = Form(default=""),
+                        ksp_log: UploadFile = File(default=None),
+                        user: dict = Depends(get_user_token_only)):
+    """Receive the offending device's diagnostics (MAC + KSP.log) for a report the
+    user opened, and append them to the moderation ticket."""
+    target = get_report_target(report_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="No pending report for this id")
+    log_bytes = await ksp_log.read() if ksp_log is not None else None
+    # Cap the log to a Discord-friendly size (keep the tail — most recent events).
+    if log_bytes and len(log_bytes) > 7_000_000:
+        log_bytes = log_bytes[-7_000_000:]
+    await _post_device_report(target, mac, log_bytes)
+    mark_report_done(target["_doc_id"])
+    return {"success": True}
 
 
 @app.get("/api/v1/auth/verify", response_model=UserProfile)

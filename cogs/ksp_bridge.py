@@ -13,7 +13,8 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import View, Button, DynamicItem
 
-from api_auth import generate_link_code, resolve_approval
+import settings
+from api_auth import generate_link_code, resolve_approval, resolve_device_challenge
 from i18n import S, tp
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,95 @@ class LinkApprovalView(View):
         self.add_item(KSPDenyButton(challenge_id))
 
 
+# ── New-device approval buttons ───────────────────────────────────────────────
+#
+# DM'd when an unrecognized device tries to use the account (a copied token, a
+# reinstall, or a genuine second PC). "Yes, it's me" trusts the device; "No —
+# report" rejects it and opens a moderation ticket. Same DynamicItem pattern as
+# the login buttons so they survive a bot restart.
+
+async def _post_device_base_ticket(client: discord.Client, data: dict):
+    """Open the moderation ticket the moment a user reports an unrecognized device.
+    Diagnostics (MAC + KSP.log) arrive as a follow-up once the offending client
+    next checks in (see api_server.device_report)."""
+    ch_id = settings.CONTRACT_MOD_CHANNEL_ID
+    if not ch_id:
+        log.warning("Device report raised but CONTRACT_MOD_CHANNEL_ID is unset")
+        return
+    try:
+        ch = client.get_channel(ch_id) or await client.fetch_channel(ch_id)
+        e = discord.Embed(
+            title="🚨 Account-sharing report",
+            description=(
+                f"**User:** {data.get('username')} (`{data.get('user_id')}`)\n"
+                f"**Unrecognized device:** `{data.get('device_id')}`\n"
+                f"**IP:** `{data.get('client_ip') or 'unknown'}`\n\n"
+                "The user reports this device isn't theirs. Awaiting the client's "
+                "diagnostics (MAC address + KSP.log)…"
+            ),
+            color=discord.Color.red(),
+        )
+        await ch.send(embed=e)
+    except Exception as exc:
+        log.warning("Could not post device-report base ticket: %s", exc)
+
+
+async def _finish_device(interaction: discord.Interaction, challenge_id: str, approve: bool):
+    data = await asyncio.to_thread(
+        resolve_device_challenge, challenge_id, str(interaction.user.id), approve)
+    if data is None:
+        msg = "⌛ This device request has expired or was already handled."
+        color = discord.Color.greyple()
+    elif approve:
+        msg = "✅ Device trusted — switch back to KSP, it should connect now."
+        color = discord.Color.green()
+    else:
+        msg = ("🚨 Reported to the moderators. As a precaution, run **/g logout** to "
+               "sign every device out of your account, then re-link only your own PC.")
+        color = discord.Color.red()
+    e = discord.Embed(description=msg, color=color)
+    await interaction.response.edit_message(embed=e, view=None)
+    # Open the ticket after responding so the 3s interaction window is never at risk.
+    if data is not None and not approve:
+        await _post_device_base_ticket(interaction.client, data)
+
+
+class KSPDeviceOkButton(DynamicItem[Button], template=r"ksp_dev_ok:(?P<chid>[^:]+)"):
+    def __init__(self, challenge_id: str):
+        super().__init__(Button(label="✅ Yes, it's me", style=discord.ButtonStyle.green,
+                                custom_id=f"ksp_dev_ok:{challenge_id}"))
+        self.chid = challenge_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["chid"])
+
+    async def callback(self, interaction: discord.Interaction):
+        await _finish_device(interaction, self.chid, approve=True)
+
+
+class KSPDeviceReportButton(DynamicItem[Button], template=r"ksp_dev_no:(?P<chid>[^:]+)"):
+    def __init__(self, challenge_id: str):
+        super().__init__(Button(label="🚫 No — report", style=discord.ButtonStyle.red,
+                                custom_id=f"ksp_dev_no:{challenge_id}"))
+        self.chid = challenge_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["chid"])
+
+    async def callback(self, interaction: discord.Interaction):
+        await _finish_device(interaction, self.chid, approve=False)
+
+
+class DeviceApprovalView(View):
+    """The Yes-it's-me / No-report button pair attached to the new-device DM."""
+    def __init__(self, challenge_id: str):
+        super().__init__(timeout=None)
+        self.add_item(KSPDeviceOkButton(challenge_id))
+        self.add_item(KSPDeviceReportButton(challenge_id))
+
+
 class KSPBridge(commands.Cog, name="KSPBridge"):
     """Discord ↔ KSP mod integration commands."""
 
@@ -124,6 +214,7 @@ class KSPBridge(commands.Cog, name="KSPBridge"):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(KSPBridge(bot))
-    # Register the login-approval buttons so DM'd prompts keep working after a
-    # bot restart (custom_id carries the challenge_id).
-    bot.add_dynamic_items(KSPLoginButton, KSPDenyButton)
+    # Register the login + device-approval buttons so DM'd prompts keep working
+    # after a bot restart (custom_id carries the challenge_id).
+    bot.add_dynamic_items(KSPLoginButton, KSPDenyButton,
+                          KSPDeviceOkButton, KSPDeviceReportButton)

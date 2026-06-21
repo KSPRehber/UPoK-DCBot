@@ -19,6 +19,8 @@ import string
 import time
 from datetime import datetime, timezone
 
+from firebase_admin import firestore
+
 from data.store import _db
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,11 @@ TOKEN_LIFETIME = 30 * 24 * 3600
 # Link code / login-approval challenge lifetime: 3 minutes
 LINK_CODE_LIFETIME = 180
 APPROVAL_LIFETIME = 180
+
+# Device-approval challenge lifetime: 1 hour. Longer than a login approval — a
+# blocked device re-prompts the user if the DM is missed, so a short window would
+# just nag. The device stays blocked until approved regardless.
+DEVICE_CHALLENGE_LIFETIME = 3600
 
 
 def _link_codes_col():
@@ -225,6 +232,180 @@ def poll_approval(challenge_id: str) -> dict:
             "username": data["username"],
         }
     return {"state": "denied"}
+
+
+# ── Device binding (anti account-sharing) ────────────────────────────────────
+#
+# Each KSP install writes a random device id once (PluginData/device.id) and sends
+# it on every request as X-Device-Id. A device that completes the full link+login-
+# approval flow is trusted automatically; any *other* device id appearing on the
+# account later (e.g. a copied session token) is hard-blocked until the user
+# approves it from a Discord DM ("✅ Yes, it's me") or rejects it ("🚫 No — report").
+#
+# The id is a random GUID — not a MAC — so it stores no personal data and survives
+# MAC rotation. The real MAC / IP / KSP.log are gathered only into a user-filed
+# moderation report, never into the binding itself.
+
+_ALLOWED_DEV_TTL = 30  # seconds — cache trusted-device sets to keep checks cheap
+_allowed_devices: dict[str, tuple[set, float]] = {}  # user_id -> (devices, fetched_at)
+
+
+def _device_chal_col():
+    return _db.collection("ksp_device_challenges")
+
+
+def _get_allowed_devices(user_id: str) -> set:
+    cached = _allowed_devices.get(user_id)
+    now = time.time()
+    if cached is not None and now - cached[1] < _ALLOWED_DEV_TTL:
+        return cached[0]
+    devices: set = set()
+    try:
+        snap = _sessions_col().document(user_id).get()
+        if snap.exists:
+            devices = set(snap.to_dict().get("allowed_devices", []) or [])
+    except Exception as exc:
+        log.warning("Could not read allowed devices for %s: %s", user_id, exc)
+        if cached is not None:
+            return cached[0]
+    _allowed_devices[user_id] = (devices, now)
+    return devices
+
+
+def add_allowed_device(user_id: str, device_id: str) -> None:
+    """Trust a device for this user (idempotent). Updates the in-process cache so
+    the device's very next request passes without waiting for the cache TTL."""
+    if not device_id:
+        return
+    _sessions_col().document(user_id).set(
+        {"allowed_devices": firestore.ArrayUnion([device_id])}, merge=True)
+    self_set = set(_get_allowed_devices(user_id)) | {device_id}
+    _allowed_devices[user_id] = (self_set, time.time())
+    log.info("Device %s… trusted for user %s", device_id[:8], user_id)
+
+
+def check_device(user_id: str, device_id: str) -> str:
+    """Return "ok" if the device is trusted for the user, else "unknown".
+
+    Trust-on-first-use: if the account has no bound device yet (a session created
+    before binding existed), the first device id seen is adopted so existing users
+    aren't locked out by the rollout. After that, only known ids pass.
+    """
+    allowed = _get_allowed_devices(user_id)
+    if not allowed:
+        if device_id:
+            add_allowed_device(user_id, device_id)
+        return "ok"
+    if not device_id:
+        return "unknown"
+    return "ok" if device_id in allowed else "unknown"
+
+
+def _device_chal_id(user_id: str, device_id: str) -> str:
+    """Deterministic challenge id per (user, device) so repeated requests from one
+    blocked device reuse a single challenge instead of spamming DMs."""
+    return "dev_" + hashlib.sha256(f"{user_id}:{device_id}".encode()).hexdigest()[:24]
+
+
+def create_device_challenge(guild_id: str, user_id: str, username: str,
+                            device_id: str, client_ip: str = "") -> tuple[str, bool]:
+    """Get-or-create a pending challenge for an unrecognized (user, device).
+    Returns (challenge_id, created); created=False means a live challenge already
+    existed, so the caller must NOT send another DM."""
+    cid = _device_chal_id(user_id, device_id)
+    doc = _device_chal_col().document(cid)
+    snap = doc.get()
+    if snap.exists:
+        data = snap.to_dict()
+        if data.get("status") == "pending" and time.time() <= data.get("expires_at", 0):
+            return cid, False
+    doc.set({
+        "guild_id": str(guild_id),
+        "user_id": str(user_id),
+        "username": username,
+        "device_id": device_id,
+        "client_ip": client_ip,
+        "status": "pending",
+        "report_requested": False,
+        "report_id": None,
+        "report_done": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": time.time() + DEVICE_CHALLENGE_LIFETIME,
+    })
+    log.info("Created device challenge for user %s (device %s…)", user_id, (device_id or "?")[:8])
+    return cid, True
+
+
+def resolve_device_challenge(challenge_id: str, acting_user_id: str,
+                             approve: bool) -> dict | None:
+    """Apply the Discord button decision (owner-checked). Approve → trust the
+    device. Reject → mark denied and flag a moderation report. Returns the
+    challenge data (so the caller can open the ticket on reject), or None."""
+    doc = _device_chal_col().document(challenge_id)
+    snap = doc.get()
+    if not snap.exists:
+        return None
+    data = snap.to_dict()
+    if str(data.get("user_id")) != str(acting_user_id):
+        log.warning("Device challenge %s: acting user %s is not owner %s — ignored",
+                    challenge_id, acting_user_id, data.get("user_id"))
+        return None
+    if data.get("status") != "pending":
+        return None
+
+    if approve:
+        add_allowed_device(data["user_id"], data["device_id"])
+        doc.update({"status": "approved"})
+        data["status"] = "approved"
+        log.info("Device challenge %s approved by user %s", challenge_id, acting_user_id)
+        return data
+
+    report_id = secrets.token_urlsafe(12)
+    doc.update({"status": "denied", "report_requested": True, "report_id": report_id})
+    data.update({"status": "denied", "report_requested": True, "report_id": report_id})
+    log.info("Device challenge %s rejected by user %s (report %s)",
+             challenge_id, acting_user_id, report_id)
+    return data
+
+
+def poll_device_challenge(challenge_id: str) -> dict:
+    """For the blocked KSP client. Returns:
+       {"state":"pending"} | {"state":"approved"} (consumes) |
+       {"state":"denied", "report_id"?} | {"state":"expired"}."""
+    doc = _device_chal_col().document(challenge_id)
+    snap = doc.get()
+    if not snap.exists:
+        return {"state": "expired"}
+    data = snap.to_dict()
+    status = data.get("status", "pending")
+    if status == "pending":
+        if time.time() > data.get("expires_at", 0):
+            return {"state": "expired"}
+        return {"state": "pending"}
+    if status == "approved":
+        doc.delete()  # device is trusted now; the challenge is spent
+        return {"state": "approved"}
+    out = {"state": "denied"}
+    if data.get("report_requested") and not data.get("report_done"):
+        out["report_id"] = data.get("report_id")
+    return out
+
+
+def get_report_target(report_id: str) -> dict | None:
+    """Find a denied challenge still awaiting its diagnostics upload."""
+    for doc in _device_chal_col().where("report_id", "==", report_id).limit(1).stream():
+        d = doc.to_dict()
+        if d.get("report_requested") and not d.get("report_done"):
+            d["_doc_id"] = doc.id
+            return d
+    return None
+
+
+def mark_report_done(challenge_doc_id: str) -> None:
+    try:
+        _device_chal_col().document(challenge_doc_id).update({"report_done": True})
+    except Exception as exc:
+        log.warning("Could not mark report done for %s: %s", challenge_doc_id, exc)
 
 
 # ── Session Tokens ───────────────────────────────────────────────────────────

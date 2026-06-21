@@ -68,6 +68,12 @@ class Config:
     # KSP_2FA_ENABLED=false in .env to skip it while testing.
     KSP_2FA_ENABLED: bool = _optional("KSP_2FA_ENABLED", "true").lower() not in ("false", "0", "no", "off")
 
+    # Device binding for KSP linking. When on, each install's random device id is
+    # bound to the account at link time and any *other* device (e.g. a copied
+    # session token) is hard-blocked until the user approves it from Discord.
+    # Default on (secure); set KSP_DEVICE_BINDING_ENABLED=false in .env to disable.
+    KSP_DEVICE_BINDING_ENABLED: bool = _optional("KSP_DEVICE_BINDING_ENABLED", "true").lower() not in ("false", "0", "no", "off")
+
     # IPs of trusted reverse proxies (comma-separated, e.g. "127.0.0.1"). When a
     # request's direct peer is one of these, the real client IP is read from
     # X-Forwarded-For for rate limiting. Leave empty when clients connect the API
