@@ -64,16 +64,79 @@ TZ = timezone(timedelta(hours=3))
 app = FastAPI(
     title="Boundless Missions KSP Bridge API",
     version="1.0.0",
-    docs_url="/api/docs",
+    # Docs + schema are off unless explicitly enabled (dev only) — otherwise the
+    # whole API surface is enumerable by anyone.
+    docs_url="/api/docs" if cfg.API_DOCS_ENABLED else None,
     redoc_url=None,
+    openapi_url="/api/openapi.json" if cfg.API_DOCS_ENABLED else None,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS only when an explicit browser origin list is configured. The KSP client is
+# not a browser, so by default no cross-origin headers are served (no wildcard).
+if cfg.API_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cfg.API_CORS_ORIGINS,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# ── Upload limits (DoS / decompression-bomb defense) ─────────────────────────
+#
+# The API runs in-process with the Discord bot, so an unbounded upload or a gzip
+# bomb takes the whole bot down via memory exhaustion. Every uploaded file is read
+# through _read_upload (hard byte cap) and every gzip payload through _safe_gunzip
+# (hard *decompressed* cap), and a cheap Content-Length check rejects oversized
+# request bodies before Starlette buffers/spools them.
+
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024          # per uploaded file (craft, screenshot, …)
+MAX_LOG_BYTES = 60 * 1024 * 1024             # KSP.log diagnostics can be large
+MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024    # cap on any single gzip expansion
+MAX_REQUEST_BYTES = 80 * 1024 * 1024         # whole-request guard (a submission carries several files)
+
+
+@app.middleware("http")
+async def _limit_request_size(request: Request, call_next):
+    """Reject an over-large request body up front (when Content-Length is present)
+    so a huge multipart upload isn't buffered/spooled before a handler runs."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_REQUEST_BYTES:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+    return await call_next(request)
+
+
+async def _read_upload(f: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    """Read an UploadFile fully but abort past `limit` bytes (413), so one client
+    can't exhaust memory with a giant upload. Reads in 1 MiB chunks."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await f.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="Uploaded file is too large.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _safe_gunzip(raw: bytes, limit: int = MAX_DECOMPRESSED_BYTES) -> bytes:
+    """gzip-decompress with a hard cap on the *decompressed* size, defusing a
+    decompression bomb (a few KB that expands to gigabytes). Reads at most
+    `limit`+1 bytes of output, so memory stays bounded regardless of the input.
+
+    Raises HTTPException(413) past the cap. Propagates (OSError, EOFError) for
+    non-gzip input so callers can keep their existing 'fall back to raw bytes'
+    behavior for payloads that weren't actually compressed."""
+    import gzip
+    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
+        out = gz.read(limit + 1)
+    if len(out) > limit:
+        raise HTTPException(status_code=413, detail="Decompressed payload is too large.")
+    return out
 
 
 # ── WebSocket Notification Hub ───────────────────────────────────────────────
@@ -225,11 +288,11 @@ def _client_ip(request: Request) -> str:
 def _guard_link_attempt(request: Request):
     """Throttle link/2FA attempts: per-IP and globally."""
     ip = _client_ip(request)
-    # Tuned for headroom on a shared public IP without ever approaching a
-    # feasible brute-force rate: even 60/min over a code's 3-min life is ~180
-    # guesses against a 1,000,000-code space. Raise if many players share one IP.
-    _rate_limit(f"link:{ip}", max_hits=10, window=60.0)    # 10 / min per IP
-    _rate_limit("link:global", max_hits=60, window=60.0)   # 60 / min overall
+    # Per-IP is the brute-force defense. The global cap is only a coarse backstop,
+    # kept high (settings) so an attacker flooding the endpoint can't trip it and
+    # lock every legitimate player out of linking (self-DoS). Both are configurable.
+    _rate_limit(f"link:{ip}", max_hits=settings.KSP_LINK_RATELIMIT_PER_IP, window=60.0)
+    _rate_limit("link:global", max_hits=settings.KSP_LINK_RATELIMIT_GLOBAL, window=60.0)
 
 
 async def get_user_token_only(authorization: str = Header(...)) -> dict:
@@ -497,7 +560,7 @@ async def device_report(report_id: str,
     if not target:
         log.warning("Device report %s: no pending report target found", report_id)
         raise HTTPException(status_code=404, detail="No pending report for this id")
-    log_bytes = await ksp_log.read() if ksp_log is not None else None
+    log_bytes = await _read_upload(ksp_log, MAX_LOG_BYTES) if ksp_log is not None else None
     log.info("Device report %s received from user %s (mac=%s, log=%d bytes)",
              report_id, user.get("user_id"), "yes" if mac else "no",
              len(log_bytes) if log_bytes else 0)
@@ -1256,13 +1319,11 @@ async def get_active_contracts(user: dict = Depends(get_current_user)):
     uid = str(user["user_id"])
     bot_uid = str(_get_bot_user_id())
 
-    col = cdb._col(gid)
-    active_statuses = [cdb.PENDING, cdb.ACTIVE, cdb.SUBMITTED, cdb.DISPUTED, cdb.COMPLETED]
+    active_statuses = {cdb.PENDING, cdb.ACTIVE, cdb.SUBMITTED, cdb.DISPUTED, cdb.COMPLETED}
     contracts = []
 
-    for doc in col.where("status", "in", active_statuses).stream():
-        c = doc.to_dict()
-        if c.get("contractor_id") == uid or c.get("issuer_id") == uid:
+    for c in cdb.iter_user_contracts(gid, uid):
+        if c.get("status") in active_statuses:
             # Auto-classify if missing (human-issued or old contracts)
             mission_type = c.get("mission_type")
             req_sit = c.get("required_situation")
@@ -1344,9 +1405,9 @@ async def get_incoming_contracts(user: dict = Depends(get_current_user)):
     col = cdb._col(gid)
     contracts = []
 
-    for doc in col.where("status", "==", cdb.PENDING).stream():
+    for doc in col.where("contractor_id", "==", uid).stream():
         c = doc.to_dict()
-        if c.get("contractor_id") == uid:
+        if c.get("status") == cdb.PENDING:
             contracts.append(ContractSummary(
                 contract_id=c["contract_id"],
                 mission=c["mission"],
@@ -1542,10 +1603,9 @@ async def resolve_dispute(contract_id: str, req: ContractDisputeRequest,
 
     # ── Pay Fine ── deduct the fine and release escrow; closes the contract.
     if action == "pay_fine":
-        bal = store.get_user(gid, contractor_id)["balance"]
-        if bal < c["fine"]:
+        # Atomic: don't let a concurrent spend slip the fine past a stale balance check.
+        if not await store.try_debit(gid, contractor_id, c["fine"]):
             return ContractAcceptResponse(success=False, message="Insufficient balance to pay the fine.")
-        await store.add_balance(gid, contractor_id, -c["fine"])
         await store.add_balance(gid, issuer_id, c["fine"] + c["payment"])
         cdb.update_contract(gid, contract_id, status=cdb.COMPLETED,
                             completed_at=datetime.utcnow().isoformat())
@@ -1736,14 +1796,12 @@ async def give_up_contract(contract_id: str, user: dict = Depends(get_current_us
     fine = c.get("fine", 0)
 
     # The fine is the agreed penalty for backing out — charged regardless of who
-    # issued the contract. Block the give-up if they can't cover it.
-    bal = store.get_user(gid, contractor_id)["balance"]
-    if bal < fine:
+    # issued the contract. Atomic check-and-deduct blocks a concurrent spend from
+    # slipping the give-up through on funds that are no longer there.
+    if not await store.try_debit(gid, contractor_id, fine):
         return ContractAcceptResponse(
             success=False,
             message=f"You need {fine} {settings.CURRENCY_SYMBOL} to pay the fine and give up.")
-    if fine:
-        await store.add_balance(gid, contractor_id, -fine)
 
     # Release escrow (+ the fine) to the issuer. A bot issuer has no wallet to credit
     # (same gating as cancel), but the contractor still pays the penalty above.
@@ -1815,15 +1873,6 @@ async def create_contract_from_ksp(req: ContractCreateRequest, user: dict = Depe
     except ValueError:
         return ContractAcceptResponse(success=False, message="Invalid date format. Use YYYY-MM-DD.")
 
-    # Check balance (need enough for escrow)
-    u = store.get_user(gid, uid)
-    bal = u.get("balance", 0)
-    if bal < req.payment:
-        return ContractAcceptResponse(
-            success=False,
-            message=f"Insufficient balance ({req.payment} needed, you have {bal}).",
-        )
-
     # Check contract limit
     count = cdb.count_active(gid, uid)
     if count >= settings.MAX_ACTIVE_CONTRACTS_PER_USER:
@@ -1836,8 +1885,14 @@ async def create_contract_from_ksp(req: ContractCreateRequest, user: dict = Depe
     corp = _get_corp(gid, contractor_id)
     contractor_name = corp.get("owner_name", "Unknown") if corp else "Unknown"
 
-    # Escrow: lock the payment
-    await store.add_balance(gid, uid, -req.payment)
+    # Escrow: lock the payment. Atomic check-and-deduct so concurrent requests
+    # can't both escrow from the same balance (double-spend).
+    if not await store.try_debit(gid, uid, req.payment):
+        bal = store.get_user(gid, uid).get("balance", 0)
+        return ContractAcceptResponse(
+            success=False,
+            message=f"Insufficient balance ({req.payment} needed, you have {bal}).",
+        )
 
     # Create contract
     c = cdb.create_contract(
@@ -1946,6 +2001,13 @@ async def create_auction_from_ksp(req: AuctionCreateRequest, user: dict = Depend
             req.start_value, req.fine, req.due_date, req.duration_hours, req.modlist,
             mission_type=mission_type,
         )
+    except ValueError:
+        # Atomic escrow lost the race against another spend — funds no longer cover it.
+        bal = store.get_user(gid, uid).get("balance", 0)
+        return ContractAcceptResponse(
+            success=False,
+            message=f"Insufficient balance ({req.start_value} needed, you have {bal}).",
+        )
     except Exception as exc:
         log.error("KSP auction create failed for user %d: %s", uid, exc)
         return ContractAcceptResponse(success=False, message="Could not post the auction. Try again.")
@@ -2049,8 +2111,10 @@ async def create_rescue_contract(
         "margin_alt": margin_alt, "margin_pos": margin_pos, "is_modded": is_modded,
     }
 
-    # Escrow the payment.
-    await store.add_balance(gid, uid, -payment)
+    # Escrow the payment (atomic check-and-deduct — no double-spend across requests).
+    if not await store.try_debit(gid, uid, payment):
+        return ContractAcceptResponse(
+            success=False, message=f"Insufficient balance ({payment} needed).")
 
     c = cdb.create_contract(
         guild_id=gid, issuer_id=uid, issuer_name=user["username"],
@@ -2065,7 +2129,7 @@ async def create_rescue_contract(
 
     # Store the wreck snapshot (gzipped ConfigNode) in Firebase Storage.
     try:
-        node_bytes = await vessel_node.read()
+        node_bytes = await _read_upload(vessel_node)
         node_url = await cdb.upload_to_storage(
             c["contract_id"], "rescue_vessel.cfg", node_bytes, "application/gzip")
         cdb.update_contract(gid, c["contract_id"], rescue_vessel_node_url=node_url)
@@ -2114,7 +2178,7 @@ def _extract_crew_names(vn_data: bytes | None) -> set[str]:
     if not vn_data:
         return set()
     try:
-        text = gzip.decompress(vn_data).decode("utf-8", "ignore")
+        text = _safe_gunzip(vn_data).decode("utf-8", "ignore")
     except (OSError, EOFError):
         text = vn_data.decode("utf-8", "ignore")
     except Exception:
@@ -2254,7 +2318,7 @@ async def submit_contract(
 
     # Read the vessel node once (used by both the rescue check below and the
     # Storage upload further down). UploadFile.read() can only be consumed once.
-    vn_data = await vessel_node.read() if vessel_node else None
+    vn_data = await _read_upload(vessel_node) if vessel_node else None
 
     # Rescue: server-side defense-in-depth before accepting the submission — the
     # rescue craft must be at the target body/situation and carry every stranded
@@ -2331,7 +2395,7 @@ async def submit_contract(
 
     # Craft file
     if craft_file:
-        data = await craft_file.read()
+        data = await _read_upload(craft_file)
         try:
             url = await cdb.upload_to_storage(
                 contract_id, craft_file.filename, data,
@@ -2347,7 +2411,7 @@ async def submit_contract(
     all_screenshots = [s for s in (screenshot1, screenshot2, screenshot3) if s]
     all_screenshots += [s for s in (screenshots or []) if s]
     for ss in all_screenshots:
-        data = await ss.read()
+        data = await _read_upload(ss)
         try:
             url = await cdb.upload_to_storage(
                 contract_id, ss.filename, data,
@@ -2634,12 +2698,57 @@ def _create_notification(
     _push_notification(guild_id, user_id, payload)
 
 
+# ── WebSocket connect tickets ────────────────────────────────────────────────
+# UnityWebRequest can't set an Authorization header on a WS handshake, so the
+# original design put the 30-day session token in the WS URL (?token=) — where it
+# leaks into access/proxy logs and stays replayable for a month. Instead the client
+# exchanges its token (over a normal authenticated request) for a short-lived,
+# single-use ticket and connects with ?ticket=. A logged ticket URL exposes nothing
+# reusable: the ticket dies on first use or after 30 seconds.
+_ws_tickets: dict[str, dict] = {}     # ticket -> {guild_id, user_id, username, expires}
+_WS_TICKET_TTL = 30.0
+
+
+def _prune_ws_tickets() -> None:
+    now = time.time()
+    for k in [k for k, v in _ws_tickets.items() if v["expires"] < now]:
+        _ws_tickets.pop(k, None)
+
+
+@app.post("/api/v1/auth/ws-ticket")
+async def issue_ws_ticket(user: dict = Depends(get_user_token_only)):
+    """Exchange a valid session token for a short-lived, single-use WebSocket ticket,
+    so the long-lived token never has to travel in the WS URL (see _ws_tickets)."""
+    _prune_ws_tickets()
+    ticket = secrets.token_urlsafe(24)
+    _ws_tickets[ticket] = {
+        "guild_id": user["guild_id"],
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "expires": time.time() + _WS_TICKET_TTL,
+    }
+    return {"ticket": ticket, "expires_in": int(_WS_TICKET_TTL)}
+
+
 @app.websocket("/ws/v1/notifications")
 async def notifications_ws(websocket: WebSocket):
-    """Live notification stream. The KSP client connects with the session token
-    in the query string (UnityWebRequest cannot set headers on a WS handshake)."""
-    token = websocket.query_params.get("token", "")
-    user = verify_session_token(token, _get_api_secret()) if token else None
+    """Live notification stream. The client connects with a short-lived single-use
+    ticket (?ticket=, from POST /auth/ws-ticket). A legacy ?token= is still accepted
+    for older clients but is deprecated — it leaks the 30-day token into URL/logs."""
+    user = None
+    ticket = websocket.query_params.get("ticket", "")
+    if ticket:
+        _prune_ws_tickets()
+        info = _ws_tickets.pop(ticket, None)   # single-use: consumed on connect
+        if info and info["expires"] >= time.time():
+            user = {"guild_id": info["guild_id"], "user_id": info["user_id"],
+                    "username": info["username"]}
+
+    if user is None:
+        # Deprecated fallback for clients that still pass the token directly.
+        token = websocket.query_params.get("token", "")
+        user = verify_session_token(token, _get_api_secret()) if token else None
+
     if user is None:
         await websocket.close(code=1008)  # policy violation
         return
@@ -2882,9 +2991,9 @@ async def craft_send_to_friend(
     if kind not in ("craft", "vessel"):
         return {"success": False, "message": "Unknown send type."}
 
-    raw = await file.read()
+    raw = await _read_upload(file)
     try:
-        payload = gzip.decompress(raw)
+        payload = _safe_gunzip(raw)
     except (OSError, EOFError):
         payload = raw  # fall back if it wasn't compressed
 
@@ -2962,10 +3071,10 @@ async def marketplace_list_craft(
     gid = int(user["guild_id"])
     uid = int(user["user_id"])
 
-    raw = await craft_file.read()
+    raw = await _read_upload(craft_file)
     # The mod gzips the craft; fall back to raw bytes if it wasn't compressed.
     try:
-        craft_bytes = gzip.decompress(raw)
+        craft_bytes = _safe_gunzip(raw)
     except (OSError, EOFError):
         craft_bytes = raw
 
@@ -2993,7 +3102,7 @@ async def marketplace_list_craft(
     # render failed client-side, the listing still posts without an image.
     if blueprint is not None:
         try:
-            bp_data = await blueprint.read()
+            bp_data = await _read_upload(blueprint)
             bp_url = await mkt.upload_blueprint(
                 listing["listing_id"], bp_data, blueprint.content_type or "image/png"
             )
@@ -3117,7 +3226,7 @@ async def checkpoint_photo(
                       settings.CHECKPOINT_PHOTOS_CHANNEL_ID, exc)
             return SubmissionResult(success=False, message="The checkpoint photo channel is unavailable.")
 
-    data = await photo.read()
+    data = await _read_upload(photo)
     if not data:
         return SubmissionResult(success=False, message="Empty image.")
 

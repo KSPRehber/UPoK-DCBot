@@ -105,13 +105,6 @@ class Contracts(commands.Cog, name="Contracts"):
         # Defer immediately — Firestore queries below can be slow
         await interaction.response.defer(ephemeral=True)
 
-        # Check balance (need enough for escrow)
-        bal = store.get_user(gid, uid)["balance"]
-        if bal < money:
-            await interaction.followup.send(
-                tp(gid, uid, "ct.err_funds", need=money, sym=sym), ephemeral=True)
-            return
-
         # Check contract limit
         count = cdb.count_active(gid, uid)
         if count >= settings.MAX_ACTIVE_CONTRACTS_PER_USER:
@@ -119,8 +112,12 @@ class Contracts(commands.Cog, name="Contracts"):
                 tp(gid, uid, "ct.err_limit", max=settings.MAX_ACTIVE_CONTRACTS_PER_USER), ephemeral=True)
             return
 
-        # Escrow: lock the payment
-        await store.add_balance(gid, uid, -money)
+        # Escrow: lock the payment. Atomic check-and-deduct so concurrent contract
+        # creates can't each escrow the same funds (double-spend).
+        if not await store.try_debit(gid, uid, money):
+            await interaction.followup.send(
+                tp(gid, uid, "ct.err_funds", need=money, sym=sym), ephemeral=True)
+            return
 
         # Create contract
         c = cdb.create_contract(
@@ -180,20 +177,17 @@ class Contracts(commands.Cog, name="Contracts"):
 
         await interaction.response.defer(ephemeral=True)
 
-        # Check balance (escrow) and active-contract limit
-        bal = store.get_user(gid, uid)["balance"]
-        if bal < money:
-            await interaction.followup.send(
-                tp(gid, uid, "ct.err_funds", need=money, sym=sym), ephemeral=True)
-            return
-
+        # Active-contract limit
         if cdb.count_active(gid, uid) >= settings.MAX_ACTIVE_CONTRACTS_PER_USER:
             await interaction.followup.send(
                 tp(gid, uid, "ct.err_limit", max=settings.MAX_ACTIVE_CONTRACTS_PER_USER), ephemeral=True)
             return
 
-        # Escrow: lock the payment
-        await store.add_balance(gid, uid, -money)
+        # Escrow: lock the payment. Atomic check-and-deduct (no double-spend).
+        if not await store.try_debit(gid, uid, money):
+            await interaction.followup.send(
+                tp(gid, uid, "ct.err_funds", need=money, sym=sym), ephemeral=True)
+            return
 
         c = cdb.create_contract(
             gid, uid, interaction.user.display_name,
@@ -225,15 +219,12 @@ class Contracts(commands.Cog, name="Contracts"):
         gid = interaction.guild_id
         await interaction.response.defer(ephemeral=True)
 
-        col = cdb._col(gid)
-        active_statuses = [cdb.PENDING, cdb.ACTIVE, cdb.SUBMITTED, cdb.DISPUTED, cdb.MOD_REVIEW]
+        active_statuses = {cdb.PENDING, cdb.ACTIVE, cdb.SUBMITTED, cdb.DISPUTED, cdb.MOD_REVIEW}
         cancelled = 0
         refunded = 0
 
-        for doc in col.where("status", "in", active_statuses).stream():
-            c = doc.to_dict()
-            uid_str = str(user.id)
-            if c.get("issuer_id") == uid_str or c.get("contractor_id") == uid_str:
+        for c in cdb.iter_user_contracts(gid, user.id):
+            if c.get("status") in active_statuses:
                 cdb.update_contract(gid, c["contract_id"], status=cdb.CANCELLED)
                 # Refund escrow to issuer (if issuer is not the bot)
                 if str(c.get("issuer_id")) != str(interaction.client.user.id):

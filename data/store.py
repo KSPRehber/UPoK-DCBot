@@ -49,6 +49,48 @@ else:
     log.warning("FIREBASE_STORAGE_BUCKET not set — contract file uploads disabled")
 
 
+# ── Upload sanitization (client-supplied filenames / content types) ──────────
+#
+# Client-supplied filenames flow into Firebase Storage object paths
+# (contracts/{id}/{filename} etc.). GCS treats the object name literally, so a
+# name with "/" or ".." can't traverse out of its prefix, but it CAN collide with
+# or shadow a sibling object and lets the client control the public object name.
+# safe_filename reduces any name to a single safe basename. safe_content_type
+# stops a client from having its public blob served as active content (HTML/SVG/JS).
+
+import re as _re
+
+_SAFE_NAME_RE = _re.compile(r"[^A-Za-z0-9._-]")
+
+_SAFE_UPLOAD_CTYPES = {
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+    "application/gzip", "application/octet-stream", "text/plain",
+}
+
+
+def safe_filename(name: str, default: str = "file") -> str:
+    """Reduce a client-supplied filename to a safe storage basename.
+
+    Strips any directory components (so it can't escape its prefix or shadow a
+    sibling via '..'/slashes), replaces anything outside [A-Za-z0-9._-], drops
+    leading dots (so '..' / '.env' can't become hidden/dot names), and caps the
+    length. Falls back to `default` when nothing usable remains."""
+    name = (name or "").replace("\\", "/")
+    name = name.rsplit("/", 1)[-1]          # basename only
+    name = _SAFE_NAME_RE.sub("_", name)
+    name = name.lstrip(".")                 # ".." -> "", ".craft" -> "craft"
+    name = name[:128]
+    return name or default
+
+
+def safe_content_type(claimed: str) -> str:
+    """Clamp a client-claimed content type to an inert allowlist. Anything not
+    explicitly safe (text/html, image/svg+xml, application/javascript, …) becomes
+    application/octet-stream, so a public blob can't be served as active content."""
+    c = (claimed or "").split(";", 1)[0].strip().lower()
+    return c if c in _SAFE_UPLOAD_CTYPES else "application/octet-stream"
+
+
 def _default_user() -> UserData:
     """Return a fresh user record with default values."""
     return {
@@ -248,12 +290,52 @@ class UserStore:
             self._mark_dirty(guild_id, user_id)
 
     async def add_balance(self, guild_id: int, user_id: int, amount: int) -> int:
-        """Add (or subtract) from a user's balance. Returns new balance."""
+        """Add (or subtract) from a user's balance. Returns new balance.
+
+        NOTE: use this only for credits (refunds, payouts) or deductions that are
+        already known to be covered. For a spend that must not overdraw, use
+        `try_debit` — `add_balance` clamps at 0, so a too-large deduction silently
+        vanishes instead of failing, which a concurrent caller can exploit to spend
+        coins they don't have (TOCTOU double-spend)."""
         async with self._lock:
             user = self.get_user(guild_id, user_id)
             user["balance"] = max(0, user["balance"] + amount)
             self._mark_dirty(guild_id, user_id)
             return user["balance"]
+
+    async def try_debit(self, guild_id: int, user_id: int, amount: int) -> bool:
+        """Atomically deduct `amount` only if the balance fully covers it.
+
+        Returns True if the debit was applied, False on insufficient funds. The
+        check and the deduction happen under one lock, so two concurrent requests
+        can't both pass a balance check on the same funds and overdraw (the bug a
+        separate get_user()+add_balance() pair has). A zero/negative amount is a
+        no-op success. Never drives the balance below zero."""
+        if amount <= 0:
+            return True
+        async with self._lock:
+            user = self.get_user(guild_id, user_id)
+            if user["balance"] < amount:
+                return False
+            user["balance"] -= amount
+            self._mark_dirty(guild_id, user_id)
+            return True
+
+    async def debit_up_to(self, guild_id: int, user_id: int, amount: int) -> int:
+        """Atomically deduct up to `amount`, capped at the available balance.
+
+        Returns the amount actually taken. For "take whatever they can pay" fines
+        where a partial charge is intended; the read + deduction are atomic so the
+        amount returned is exactly what left the account."""
+        if amount <= 0:
+            return 0
+        async with self._lock:
+            user = self.get_user(guild_id, user_id)
+            taken = min(amount, user["balance"])
+            if taken > 0:
+                user["balance"] -= taken
+                self._mark_dirty(guild_id, user_id)
+            return taken
 
     async def add_rescue(self, guild_id: int, user_id: int, amount: int = 1) -> int:
         """Increment a user's completed-rescue counter. Returns the new total."""

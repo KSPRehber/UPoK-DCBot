@@ -192,6 +192,16 @@ KSP_NOTIFICATION_CHECK_INTERVAL = 600  # 10 minutes
 # API server port (should match API_PORT in .env)
 KSP_API_PORT = 5022
 
+# ── KSP link / 2FA brute-force rate limits ───────────────────────────────────
+# Per-IP is the real brute-force defense: at 10/min over a code's 3-min life that
+# is ~30 guesses against a 1,000,000-code space. The global cap is only a coarse
+# backstop — keep it high enough that normal traffic on a shared public IP can
+# never trip it, or one attacker flooding the endpoint locks every player out of
+# linking (a self-inflicted DoS). 600/min is still <0.2% of the code space per
+# code lifetime, so it costs nothing defensively.
+KSP_LINK_RATELIMIT_PER_IP = 10       # link/2FA attempts per IP per minute
+KSP_LINK_RATELIMIT_GLOBAL = 600      # global backstop per minute (anti self-DoS)
+
 # ── Known Celestial Bodies ───────────────────────────────────────────────────
 # Used by the heuristic mission classifier (fallback when Gemini is unavailable).
 # The AI classifier handles any body name from text automatically — this list

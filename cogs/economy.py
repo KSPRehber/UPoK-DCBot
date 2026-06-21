@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import settings
+from cogs import perms
 from data.store import store
 from i18n import t, tp
 
@@ -18,11 +19,13 @@ log = logging.getLogger(__name__)
 
 
 def mod_only():
-    """User must have Kick Members or Administrator permission."""
+    """User must have Kick Members or Administrator permission. Gates on the real
+    invoker (mimic-safe)."""
     async def predicate(interaction: discord.Interaction) -> bool:
-        if isinstance(interaction.user, discord.Member):
-            return (interaction.user.guild_permissions.kick_members
-                    or interaction.user.guild_permissions.administrator)
+        u = perms.real_user(interaction)
+        if isinstance(u, discord.Member):
+            return (u.guild_permissions.kick_members
+                    or u.guild_permissions.administrator)
         return False
     return app_commands.check(predicate)
 
@@ -76,17 +79,18 @@ class Economy(commands.Cog, name="Economy"):
             )
             return
 
-        sender = store.get_user(gid, interaction.user.id)
-        if sender["balance"] < amount:
+        # Execute transfer. Atomic debit so two concurrent /pay calls can't both
+        # pass the balance check on the same funds and transfer more than is held.
+        if not await store.try_debit(gid, interaction.user.id, amount):
+            sender = store.get_user(gid, interaction.user.id)
             await interaction.response.send_message(
                 tp(gid, uid, "eco.pay.insufficient", balance=f"{sender['balance']:,}", currency=settings.CURRENCY_NAME),
                 ephemeral=True,
             )
             return
 
-        # Execute transfer
-        new_sender_bal = await store.add_balance(gid, interaction.user.id, -amount)
         new_receiver_bal = await store.add_balance(gid, member.id, amount)
+        new_sender_bal = store.get_user(gid, interaction.user.id)["balance"]
 
         embed = discord.Embed(
             title=t(gid, "eco.pay.title", symbol=settings.CURRENCY_SYMBOL),

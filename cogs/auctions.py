@@ -143,8 +143,14 @@ async def open_auction(bot, gid: int, issuer_id: int, issuer_name: str, mission:
     channel. Returns the auction doc. Raises (after refunding the escrow) if the
     post fails. Callers must pre-validate balance / limit / date / duration and
     that settings.AUCTION_CHANNEL_ID is set. Shared by the /auction slash command
-    and the KSP-mod API endpoint."""
-    await store.add_balance(gid, issuer_id, -start_value)
+    and the KSP-mod API endpoint.
+
+    The escrow debit is atomic (try_debit): even though callers pre-validate the
+    balance, that check and this debit aren't a single operation, so a concurrent
+    request could otherwise escrow twice from the same funds. Raises ValueError on
+    insufficient funds (caller surfaces it as the same 'insufficient balance')."""
+    if not await store.try_debit(gid, issuer_id, start_value):
+        raise ValueError("insufficient_balance")
     ends_at = (datetime.utcnow() + timedelta(hours=duration_hours)).isoformat()
     a = adb.create_auction(
         gid, issuer_id, issuer_name, mission, start_value, fine, due_date, ends_at,

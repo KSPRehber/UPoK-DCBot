@@ -323,10 +323,14 @@ class CloseTicketButton(DynamicItem[Button], template=r"gk_ticket_close"):
 
     async def callback(self, interaction: discord.Interaction):
         from cogs.gkchannels import is_mod
+        from cogs.perms import real_user
         channel = interaction.channel
         opener_id = _ticket_opener_id(channel)
         member = interaction.user
-        allowed = (isinstance(member, discord.Member) and is_mod(member)) \
+        # Mod power gates on the REAL invoker (mimic-safe); the opener check stays on
+        # the acting-as identity, which mimic legitimately changes.
+        ru = real_user(interaction)
+        allowed = (isinstance(ru, discord.Member) and is_mod(ru)) \
             or (opener_id is not None and member.id == opener_id)
         if not allowed:
             await interaction.response.send_message(

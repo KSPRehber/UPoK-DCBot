@@ -80,17 +80,17 @@ def _get_token_version(user_id: str) -> int:
     if cached is not None and now - cached[1] < _TOKEN_VERSION_TTL:
         return cached[0]
 
-    version = 0
     try:
         snap = _sessions_col().document(user_id).get()
-        if snap.exists:
-            version = int(snap.to_dict().get("token_version", 0) or 0)
+        version = int(snap.to_dict().get("token_version", 0) or 0) if snap.exists else 0
     except Exception as exc:
         log.warning("Could not read token version for %s: %s", user_id, exc)
-        # On a read failure, prefer the last known value over silently
-        # accepting tokens we can't validate the version of.
-        if cached is not None:
-            return cached[0]
+        # Read failed: return the last known value (a revocation already cached still
+        # applies), but do NOT cache this guess. Caching it would pin a possibly-stale
+        # version for the whole TTL — so a Firestore blip at the wrong moment could
+        # keep accepting a just-revoked token even after Firestore recovers. Not
+        # caching means the very next request re-reads and picks up the real version.
+        return cached[0] if cached is not None else 0
 
     _token_versions[user_id] = (version, now)
     return version

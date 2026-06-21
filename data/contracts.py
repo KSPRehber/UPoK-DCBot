@@ -8,7 +8,7 @@ from typing import Any
 
 import aiohttp
 
-from data.store import _db, _storage_bucket
+from data.store import _db, _storage_bucket, safe_filename, safe_content_type
 
 log = logging.getLogger(__name__)
 
@@ -95,24 +95,41 @@ def update_contract(guild_id: int, contract_id: str, **fields) -> None:
     _col(guild_id).document(contract_id).update(fields)
 
 
-def count_active(guild_id: int, user_id: int) -> int:
+def iter_user_contracts(guild_id: int, user_id: int) -> list[ContractData]:
+    """All contracts where the user is issuer or contractor, deduped by id.
+
+    Uses two single-field-equality queries (each served by Firestore's automatic
+    single-field index — no composite index required) instead of streaming every
+    contract in the guild and OR-filtering in Python. The returned set is
+    identical to the old `where("status","in",...).stream()` + Python filter,
+    minus the status filter, which callers apply in-memory.
+    """
+    uid = str(user_id)
     col = _col(guild_id)
-    active_statuses = [PENDING, ACTIVE, SUBMITTED, DISPUTED, MOD_REVIEW]
-    count = 0
-    for doc in col.where("status", "in", active_statuses).stream():
-        d = doc.to_dict()
-        if d.get("issuer_id") == str(user_id) or d.get("contractor_id") == str(user_id):
-            count += 1
-    return count
+    by_id: dict[str, ContractData] = {}
+    for field in ("contractor_id", "issuer_id"):
+        for doc in col.where(field, "==", uid).stream():
+            by_id[doc.id] = doc.to_dict()
+    return list(by_id.values())
+
+
+def count_active(guild_id: int, user_id: int) -> int:
+    active_statuses = {PENDING, ACTIVE, SUBMITTED, DISPUTED, MOD_REVIEW}
+    return sum(
+        1 for c in iter_user_contracts(guild_id, user_id)
+        if c.get("status") in active_statuses
+    )
 
 
 async def upload_to_storage(contract_id: str, filename: str, data: bytes, content_type: str = "application/octet-stream") -> str:
     """Upload a file to Firebase Storage under contracts/{contract_id}/. Returns public URL."""
     if _storage_bucket is None:
         raise RuntimeError("Firebase Storage not configured")
-    path = f"contracts/{contract_id}/{filename}"
+    # Sanitize the client-supplied filename + content type before they reach the
+    # public object path (no prefix escape / sibling shadowing / active-content).
+    path = f"contracts/{contract_id}/{safe_filename(filename, 'file')}"
     blob = _storage_bucket.blob(path)
-    blob.upload_from_string(data, content_type=content_type)
+    blob.upload_from_string(data, content_type=safe_content_type(content_type))
     blob.make_public()
     log.info("Uploaded %s to Storage", path)
     return blob.public_url

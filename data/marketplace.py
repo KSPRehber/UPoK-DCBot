@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from data.store import _db, _storage_bucket
+from data.store import _db, _storage_bucket, safe_filename
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ async def upload_craft(listing_id: str, filename: str, data: bytes) -> str:
     """Upload a raw (decompressed) .craft file to Storage. Returns public URL."""
     if _storage_bucket is None:
         raise RuntimeError("Firebase Storage not configured")
-    path = f"marketplace/{listing_id}/{filename}"
+    path = f"marketplace/{listing_id}/{safe_filename(filename, 'craft.craft')}"
     blob = _storage_bucket.blob(path)
     blob.upload_from_string(data, content_type="text/plain")
     blob.make_public()

@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import cfg
+from cogs import perms
 from api_auth import generate_link_code
 from data import mod_version as mver
 
@@ -16,20 +17,20 @@ log = logging.getLogger(__name__)
 
 
 def is_admin():
-    """Check: user must have Administrator permission or be the bot owner."""
+    """Check: user must have Administrator permission or be the bot owner.
+
+    Gates on the *real* invoker (mimic-safe) so an admin mimicking a higher-
+    privileged user can't borrow their authority."""
     async def predicate(interaction: discord.Interaction) -> bool:
-        if interaction.user.id == cfg.OWNER_ID:
-            return True
-        if isinstance(interaction.user, discord.Member):
-            return interaction.user.guild_permissions.administrator
-        return False
+        return perms.is_admin_user(interaction)
     return app_commands.check(predicate)
 
 
 def is_owner():
-    """Check: user must be the bot owner (set via BOT_OWNER_ID in .env)."""
+    """Check: user must be the bot owner (set via BOT_OWNER_ID in .env). Gates on
+    the real invoker, so mimicking the owner does not pass this check."""
     async def predicate(interaction: discord.Interaction) -> bool:
-        return interaction.user.id == cfg.OWNER_ID
+        return perms.is_owner_user(interaction)
     return app_commands.check(predicate)
 
 
@@ -143,32 +144,50 @@ class Admin(commands.Cog, name="Admin"):
         log.info("%s generated admin link code for %s (%s)", interaction.user, target, target.id)
 
     # ── /mimic ────────────────────────────────────────────────────────────────
+    # Owner-only. Mimic lets the actor run every interaction AS another user, so it
+    # is a powerful impersonation tool: restricted to the bot owner, and it refuses
+    # to target another privileged user (owner/admin) so it can't be used to act
+    # destructively as them. Sessions auto-expire (see bot.MIMIC_TTL).
     @app_commands.command(
-        name="mimic", description="Act as another user for testing (Admin only)"
+        name="mimic", description="Act as another user for testing (Owner only)"
     )
     @app_commands.describe(target="The user to mimic")
-    @is_admin()
+    @is_owner()
     async def mimic(self, interaction: discord.Interaction, target: discord.Member) -> None:
+        # Never mimic another privileged account (owner/admin) — avoids acting with
+        # or against their authority and keeps the audit trail meaningful.
+        if target.id == cfg.OWNER_ID or target.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You can't mimic another administrator or the owner.", ephemeral=True)
+            return
+
+        import time as _time
+        from bot import MIMIC_TTL
         if not hasattr(self.bot, "mimic_map"):
             self.bot.mimic_map = {}
-        self.bot.mimic_map[interaction.user.id] = target
+        self.bot.mimic_map[interaction.user.id] = (target, _time.time() + MIMIC_TTL)
         await interaction.response.send_message(
-            f"🎭 You are now mimicking {target.mention}. Interactions will run as them.", ephemeral=True
+            f"🎭 You are now mimicking {target.mention}. Interactions will run as them "
+            f"for {int(MIMIC_TTL // 60)} minutes, or until /unmimic.", ephemeral=True
         )
-        log.info("%s is now mimicking %s", interaction.user, target)
+        # Audit on the REAL actor (interaction.user is the actor here — /mimic is
+        # excluded from the swap), so the trail records who impersonated whom.
+        log.warning("MIMIC: %s (%s) is now mimicking %s (%s)",
+                    interaction.user, interaction.user.id, target, target.id)
 
     # ── /unmimic ──────────────────────────────────────────────────────────────
     @app_commands.command(
-        name="unmimic", description="Stop mimicking another user (Admin only)"
+        name="unmimic", description="Stop mimicking another user (Owner only)"
     )
-    @is_admin()
+    @is_owner()
     async def unmimic(self, interaction: discord.Interaction) -> None:
         if hasattr(self.bot, "mimic_map") and interaction.user.id in self.bot.mimic_map:
-            target = self.bot.mimic_map.pop(interaction.user.id)
+            target, _ = self.bot.mimic_map.pop(interaction.user.id)
             await interaction.response.send_message(
                 f"🎭 Stopped mimicking {target.mention}.", ephemeral=True
             )
-            log.info("%s stopped mimicking %s", interaction.user, target)
+            log.warning("MIMIC: %s (%s) stopped mimicking %s",
+                        interaction.user, interaction.user.id, target)
         else:
             await interaction.response.send_message(
                 "❌ You are not mimicking anyone.", ephemeral=True

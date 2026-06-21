@@ -374,11 +374,11 @@ class PayFineButton(DynamicItem[Button], template=r"ct_payfine:" + _ID_PATTERN):
         c = cdb.get_contract(self.gid, self.cid)
         if not c:
             return
-        bal = store.get_user(self.gid, int(c["contractor_id"]))["balance"]
-        if bal < c["fine"]:
+        # Atomic check-and-deduct so a concurrent spend can't slip the fine past a
+        # stale balance read.
+        if not await store.try_debit(self.gid, int(c["contractor_id"]), c["fine"]):
             await interaction.followup.send(t(self.gid, "ct.no_funds"), ephemeral=True)
             return
-        await store.add_balance(self.gid, int(c["contractor_id"]), -c["fine"])
         await store.add_balance(self.gid, int(c["issuer_id"]), c["fine"] + c["payment"])
         from datetime import datetime
         cdb.update_contract(self.gid, self.cid, status=cdb.COMPLETED, completed_at=datetime.utcnow().isoformat())
@@ -576,10 +576,10 @@ class ModEnforceButton(DynamicItem[Button], template=r"ct_mod_f:" + _ID_PATTERN)
         c = cdb.get_contract(self.gid, self.cid)
         if not c:
             return
-        bal = store.get_user(self.gid, int(c["contractor_id"]))["balance"]
-        fine = min(c["fine"], bal)
+        # Take whatever the contractor can pay toward the fine, atomically, and pass
+        # exactly that amount to the issuer (plus the escrowed payment).
+        fine = await store.debit_up_to(self.gid, int(c["contractor_id"]), c["fine"])
         if fine > 0:
-            await store.add_balance(self.gid, int(c["contractor_id"]), -fine)
             await store.add_balance(self.gid, int(c["issuer_id"]), fine)
         await store.add_balance(self.gid, int(c["issuer_id"]), c["payment"])
         from datetime import datetime

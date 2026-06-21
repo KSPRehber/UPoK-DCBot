@@ -231,7 +231,9 @@ async def _handle_selection(interaction: discord.Interaction, week_key: str, gui
         is_exempt = False
         if getattr(settings, "WEEKLY_MISSIONS_MODS_IGNORE_LOCK", False):
             from cogs.gkchannels import is_mod
-            if isinstance(interaction.user, discord.Member) and is_mod(interaction.user):
+            from cogs.perms import real_user
+            ru = real_user(interaction)   # mimic-safe: gate on the real invoker
+            if isinstance(ru, discord.Member) and is_mod(ru):
                 is_exempt = True
         if not is_exempt:
             await interaction.followup.send(t(guild_id, "wm.locked"), ephemeral=True)
@@ -509,8 +511,10 @@ class WeeklyMissions(commands.Cog, name="WeeklyMissions"):
         xp: int, coins: int, fine: int, 
         accept_hours: int, duration_days: int
     ):
-        if isinstance(interaction.user, discord.Member):
-            if not (interaction.user.guild_permissions.kick_members or interaction.user.guild_permissions.administrator):
+        from cogs.perms import real_user
+        ru = real_user(interaction)   # mimic-safe: gate on the real invoker
+        if isinstance(ru, discord.Member):
+            if not (ru.guild_permissions.kick_members or ru.guild_permissions.administrator):
                 await interaction.response.send_message("❌ Mod only.", ephemeral=True)
                 return
         

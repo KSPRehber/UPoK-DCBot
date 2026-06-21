@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from data.store import _db
+from cogs import perms
 from i18n import t, tp
 
 log = logging.getLogger(__name__)
@@ -92,8 +93,9 @@ def is_mod(member: discord.Member) -> bool:
 
 def mod_only():
     async def predicate(interaction: discord.Interaction) -> bool:
-        if isinstance(interaction.user, discord.Member):
-            return is_mod(interaction.user)
+        u = perms.real_user(interaction)   # mimic-safe: gate on the real invoker
+        if isinstance(u, discord.Member):
+            return is_mod(u)
         return False
     return app_commands.check(predicate)
 

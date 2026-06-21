@@ -62,6 +62,17 @@ class Config:
     API_PORT: int = int(_optional("API_PORT", "5022"))
     API_SECRET_KEY: str = _optional("API_SECRET_KEY", "")
 
+    # Interactive API docs (Swagger UI + OpenAPI schema). Off by default: the docs
+    # enumerate every endpoint for an attacker and the KSP client never needs them.
+    # Set API_DOCS_ENABLED=true only for local development.
+    API_DOCS_ENABLED: bool = _optional("API_DOCS_ENABLED", "false").lower() in ("true", "1", "yes", "on")
+
+    # Browser CORS allow-list (comma-separated origins). Empty by default — the KSP
+    # client is UnityWebRequest (not a browser) and needs no CORS, so no wildcard is
+    # served. Set explicit origins only if a browser front-end must call the API.
+    _raw_cors = _optional("API_CORS_ORIGINS", "")
+    API_CORS_ORIGINS: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]
+
     # Discord DM login approval for KSP account linking. When on, a valid link
     # code only earns a "push approval" prompt DM'd to the user, who must press a
     # Log-in button in Discord before a token is issued. Default on (secure); set

@@ -93,15 +93,16 @@ class BuyButton(DynamicItem[Button], template=r"mk_buy:" + _ID_PATTERN):
 
         # Charge only first-time buyers; repeat buyers get a free re-delivery.
         if not already_owned:
-            buyer = store.get_user(gid, buyer_id)
-            if buyer["balance"] < price:
+            # Atomic check-and-deduct so a double-click / concurrent buy can't pay
+            # for the craft twice from the same balance (or overdraw via the clamp).
+            if not await store.try_debit(gid, buyer_id, price):
+                buyer = store.get_user(gid, buyer_id)
                 await interaction.followup.send(
                     f"❌ You need **{price:,}** {settings.CURRENCY_SYMBOL} but only have "
                     f"**{buyer['balance']:,}**.",
                     ephemeral=True,
                 )
                 return
-            await store.add_balance(gid, buyer_id, -price)
             await store.add_balance(gid, seller_id, price)
 
         # Download the blueprint and DM it to the buyer.

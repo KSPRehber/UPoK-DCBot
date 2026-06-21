@@ -15,6 +15,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -37,21 +38,54 @@ log = logging.getLogger(__name__)
 # We monkey-patch the three internal dispatch points in discord.py to swap
 # interaction.user with the mimicked target BEFORE handlers run. The 'user'
 # slot on Interaction is writable, so direct assignment works fine.
+#
+# SECURITY: the swap only changes *business-logic identity*. It must NEVER let the
+# real actor gain authority they don't have. Two invariants enforce that:
+#   1. /mimic is owner-only and refuses privileged targets (see cogs/admin.py).
+#   2. Every permission check gates on the REAL invoker via cogs/perms.real_user
+#      (which reads interaction.extras["_mimic_real_user"]), not the swapped user.
+# Entries auto-expire (MIMIC_TTL) so a forgotten mimic can't linger indefinitely.
+
+MIMIC_TTL = 1800.0   # seconds — a mimic session auto-clears after 30 minutes
+
+
+def _mimic_target(bot, real_id):
+    """The live mimic target for `real_id`, or None. Drops the entry once expired.
+    mimic_map values are (target_member, expires_at)."""
+    mmap = getattr(bot, "mimic_map", None)
+    if not mmap or real_id is None:
+        return None
+    entry = mmap.get(real_id)
+    if entry is None:
+        return None
+    target, expires = entry
+    if time.time() > expires:
+        mmap.pop(real_id, None)
+        return None
+    return target
+
+
+def _apply_mimic(bot, interaction, *, exclude=()):
+    """Swap interaction.user to the mimic target (stashing the real user) unless the
+    invoked command is in `exclude` (so mimic/unmimic always run as the real actor)."""
+    real_user = interaction.user
+    real_id = getattr(real_user, "id", None)
+    target = _mimic_target(bot, real_id)
+    if target is None:
+        return
+    if exclude:
+        cmd = getattr(interaction, "command", None)
+        if (getattr(cmd, "name", None) if cmd else None) in exclude:
+            return
+    interaction.extras["_mimic_real_user"] = real_user
+    interaction.user = target
+
 
 # Patch CommandTree._from_interaction (slash commands + autocomplete)
 _original_from_interaction = discord.app_commands.CommandTree._from_interaction
 
 def _patched_from_interaction(self, interaction):
-    bot = self.client
-    if hasattr(bot, "mimic_map"):
-        real_user = interaction.user
-        real_id = getattr(real_user, "id", None)
-        if real_id in bot.mimic_map:
-            cmd = interaction.command
-            cmd_name = getattr(cmd, "name", None) if cmd else None
-            if cmd_name not in ("mimic", "unmimic"):
-                interaction.extras["_mimic_real_user"] = real_user
-                interaction.user = bot.mimic_map[real_id]
+    _apply_mimic(self.client, interaction, exclude=("mimic", "unmimic"))
     _original_from_interaction(self, interaction)
 
 discord.app_commands.CommandTree._from_interaction = _patched_from_interaction
@@ -61,12 +95,8 @@ _original_view_dispatch = discord.ui.view.ViewStore.dispatch_view
 
 def _patched_view_dispatch(self, component_type, custom_id, interaction):
     bot = getattr(interaction, "client", None) or getattr(interaction, "_client", None)
-    if bot and hasattr(bot, "mimic_map"):
-        real_user = interaction.user
-        real_id = getattr(real_user, "id", None)
-        if real_id in bot.mimic_map:
-            interaction.extras["_mimic_real_user"] = real_user
-            interaction.user = bot.mimic_map[real_id]
+    if bot:
+        _apply_mimic(bot, interaction)
     _original_view_dispatch(self, component_type, custom_id, interaction)
 
 discord.ui.view.ViewStore.dispatch_view = _patched_view_dispatch
@@ -76,12 +106,8 @@ _original_modal_dispatch = discord.ui.view.ViewStore.dispatch_modal
 
 def _patched_modal_dispatch(self, custom_id, interaction, components, resolved):
     bot = getattr(interaction, "client", None) or getattr(interaction, "_client", None)
-    if bot and hasattr(bot, "mimic_map"):
-        real_user = interaction.user
-        real_id = getattr(real_user, "id", None)
-        if real_id in bot.mimic_map:
-            interaction.extras["_mimic_real_user"] = real_user
-            interaction.user = bot.mimic_map[real_id]
+    if bot:
+        _apply_mimic(bot, interaction)
     _original_modal_dispatch(self, custom_id, interaction, components, resolved)
 
 discord.ui.view.ViewStore.dispatch_modal = _patched_modal_dispatch

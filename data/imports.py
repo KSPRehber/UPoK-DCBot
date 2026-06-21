@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from data.store import _db, _storage_bucket
+from data.store import _db, _storage_bucket, safe_filename
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def upload_gift(import_id: str, filename: str, data: bytes) -> str:
     """
     if _storage_bucket is None:
         raise RuntimeError("Firebase Storage not configured")
-    path = f"gifts/{import_id}/{filename}"
+    path = f"gifts/{import_id}/{safe_filename(filename, 'craft.craft')}"
     blob = _storage_bucket.blob(path)
     blob.upload_from_string(data, content_type="text/plain")
     blob.make_public()

@@ -6,17 +6,19 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import cfg
+from cogs import perms
 from i18n import t, tp
 
 
 def mod_only():
     async def predicate(interaction: discord.Interaction) -> bool:
-        if isinstance(interaction.user, discord.Member):
+        u = perms.real_user(interaction)   # mimic-safe: gate on the real invoker
+        if isinstance(u, discord.Member):
             import settings
-            if settings.MOD_ROLE_ID and interaction.user.get_role(settings.MOD_ROLE_ID):
+            if settings.MOD_ROLE_ID and u.get_role(settings.MOD_ROLE_ID):
                 return True
-            return (interaction.user.guild_permissions.kick_members
-                    or interaction.user.guild_permissions.administrator)
+            return (u.guild_permissions.kick_members
+                    or u.guild_permissions.administrator)
         return False
     return app_commands.check(predicate)
 
