@@ -149,8 +149,13 @@ async def upload_craft(listing_id: str, filename: str, data: bytes) -> str:
     """Upload a raw (decompressed) .craft file to Storage. Returns public URL."""
     if _storage_bucket is None:
         raise RuntimeError("Firebase Storage not configured")
-    path = f"marketplace/{listing_id}/{safe_filename(filename, 'craft.craft')}"
+    name = safe_filename(filename, 'craft.craft')
+    path = f"marketplace/{listing_id}/{name}"
     blob = _storage_bucket.blob(path)
+    # Force a download (not inline text) when the browser hits the public URL:
+    # the .craft is text/plain, so without this GCS renders it in the tab. The
+    # HTML `download` attribute can't help — it's ignored for cross-origin URLs.
+    blob.content_disposition = f'attachment; filename="{name}"'
     blob.upload_from_string(data, content_type="text/plain")
     blob.make_public()
     log.info("Uploaded %s to Storage", path)
