@@ -13,8 +13,44 @@ from data.store import store
 from data import contracts as cdb
 from data import imports as imp
 from data import guild_config
+from data import mission_constraints as mc
 
 log = logging.getLogger(__name__)
+
+_LS_NAMES = {"usi": "USI-LS", "tac": "TAC-LS", "snacks": "Snacks", "kerbalism": "Kerbalism"}
+
+
+def _crew_requirement_text(constraints: dict) -> str | None:
+    """Human phrase for a contract's min/max crew-aboard requirement, or None."""
+    mn = constraints.get("min_crew")
+    mx = constraints.get("max_crew")
+    if mn and mx:
+        return f"exactly {mn} aboard" if mn == mx else f"{mn}–{mx} aboard"
+    if mx:
+        return f"up to {mx} aboard"
+    if mn:
+        return f"at least {mn} aboard"
+    return None
+
+
+def _ls_endurance_text(c: dict, constraints: dict) -> str | None:
+    """Min–max life-support endurance for the contract's crew range, when the contract
+    carries craft LS info (populated at submission). Endurance is per-kerbal, so more
+    crew = shorter; the range spans the required crew band (or 1..capacity)."""
+    key = (c.get("life_support") or "none").lower()
+    per_kerbal = float(c.get("ls_endurance_days") or 0.0)
+    if key not in _LS_NAMES or per_kerbal <= 0:
+        return None
+    name = _LS_NAMES[key]
+    cap = int(c.get("ls_crew_capacity") or 0)
+    lo = constraints.get("min_crew") or 1
+    hi = constraints.get("max_crew") or cap or lo
+    lo, hi = max(1, min(lo, hi)), max(1, max(lo, hi))
+    longest = per_kerbal / lo
+    shortest = per_kerbal / hi
+    if hi > lo:
+        return f"{name} · ~{shortest:.0f}–{longest:.0f} d for {lo}–{hi} kerbals"
+    return f"{name} · ~{longest:.0f} d for {lo} kerbal" + ("s" if lo != 1 else "")
 
 # ── Regex pattern reused by all buttons ──────────────────────────────────────
 # contract_ids are Firestore auto-IDs (alphanumeric), guild_ids are snowflakes
@@ -38,6 +74,17 @@ def _embed(c, guild_id):
     e.add_field(name=t(guild_id, "ct.due"), value=c["due_date"], inline=True)
     e.add_field(name=t(guild_id, "ct.status"), value=f"`{c['status']}`", inline=True)
     
+    # Crew-aboard requirement and (once a craft has been submitted) its min–max
+    # life-support endurance for that crew. Constraints come off the contract when
+    # present, else are derived from the mission text.
+    constraints = c.get("constraints") or mc.extract_heuristic(c.get("mission", ""))
+    crew_txt = _crew_requirement_text(constraints)
+    if crew_txt:
+        e.add_field(name="👨‍🚀 Crew", value=crew_txt, inline=True)
+    ls_txt = _ls_endurance_text(c, constraints)
+    if ls_txt:
+        e.add_field(name="🥫 Life Support", value=ls_txt, inline=True)
+
     if c.get("modlist"):
         # Truncate if necessary to fit in Discord's 1024 char limit for fields
         mod_text = c["modlist"]

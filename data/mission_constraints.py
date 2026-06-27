@@ -26,6 +26,8 @@ Canonical constraints dict (every key optional; omitted/empty == no restriction)
       "min_parts":                    int,    # part-count floor (optional)
       "max_dv":                       float,  # vacuum Δv ceiling, m/s (optional)
       "min_dv":                       float,  # vacuum Δv floor, m/s (optional)
+      "max_crew":                     int,    # crew-aboard ceiling (optional)
+      "min_crew":                     int,    # crew-aboard floor (optional)
       "notes":                        str,    # human-readable summary (optional)
     }
 
@@ -145,7 +147,8 @@ def is_empty(constraints: dict | None) -> bool:
     if any(constraints.get(k) for k in LIST_KEYS):
         return False
     return not (constraints.get("max_parts") or constraints.get("min_parts")
-                or constraints.get("max_dv") or constraints.get("min_dv"))
+                or constraints.get("max_dv") or constraints.get("min_dv")
+                or constraints.get("max_crew") or constraints.get("min_crew"))
 
 
 def _as_str_list(val) -> list[str]:
@@ -186,7 +189,7 @@ def normalize(raw: dict | None) -> dict:
         out[key] = _dedupe(_map_tokens(raw.get(key), _PART_CATEGORY_ALIASES, keep_unknown=True,
                                        lower=True))
 
-    for key in ("max_parts", "min_parts"):
+    for key in ("max_parts", "min_parts", "max_crew", "min_crew"):
         val = raw.get(key)
         if isinstance(val, bool):
             continue
@@ -323,7 +326,58 @@ def extract_heuristic(text: str) -> dict:
     # Delta-v limits, e.g. "at least 3000 m/s of delta-v" / "no more than 5 km/s dv".
     _extract_delta_v(text, out)
 
+    # Crew-aboard limits, e.g. "crew of 3" / "carry at least 2 kerbals" / "2-4 crew".
+    _extract_crew(text, out)
+
     return normalize(out)
+
+
+def _extract_crew(text: str, out: dict) -> None:
+    """Detect min/max crew-aboard limits. Handles 'crew of N', 'carry N kerbals',
+    'N crew', inclusive ('at most/least N crew') and strict ('more/fewer than N')
+    bounds, and ranges ('between 2 and 4 crew' / '2-4 kerbals'). Most restrictive
+    bound wins. A crew noun must be present so plain numbers don't trip it."""
+    import re
+    low = text.lower()
+    maxes: list[int] = []
+    mins: list[int] = []
+    # English crew/kerbal(s)/astronaut(s) or Turkish mürettebat/kerbal.
+    K = r"(?:crew(?:\s*members?)?|kerbals?|astronauts?|mürettebat\w*)"
+
+    def n(m, delta=0, gi=1):
+        return int(m.group(gi)) + delta
+
+    # exactly N ("crew of 3", "exactly 2 kerbals")
+    for m in re.finditer(rf"(?:crew\s*of|exactly|precisely|tam)\s*(\d+)\s*{K}?", low):
+        maxes.append(n(m)); mins.append(n(m))
+    # range: "between N and M crew" / "N to M kerbals" / "N-M crew"
+    for m in re.finditer(rf"(?:between\s*)?(\d+)\s*(?:and|to|-|–|ile)\s*(\d+)\s*{K}", low):
+        mins.append(int(m.group(1))); maxes.append(int(m.group(2)))
+    # inclusive max
+    for m in re.finditer(rf"(?:max(?:imum)?|no more than|at most|up to|no greater than|"
+                         rf"en fazla|en çok)\s*(?:of\s*)?(\d+)\s*{K}", low):
+        maxes.append(n(m))
+    for m in re.finditer(rf"(\d+)\s*{K}\s*or\s*(?:fewer|less)", low):
+        maxes.append(n(m))
+    # strict max ("fewer/less than N crew" => N-1)
+    for m in re.finditer(rf"(?:fewer than|less than|under|below|altında)\s*(\d+)\s*{K}", low):
+        maxes.append(max(1, n(m, -1)))
+    # inclusive min ("at least N crew", "carry N kerbals")
+    for m in re.finditer(rf"(?:min(?:imum)?|at least|no fewer than|no less than|"
+                         rf"carry|with|en az)\s*(?:of\s*)?(\d+)\s*{K}", low):
+        mins.append(n(m))
+    for m in re.finditer(rf"(\d+)\s*{K}\s*or\s*more", low):
+        mins.append(n(m))
+    for m in re.finditer(rf"(\d+)\+\s*{K}", low):
+        mins.append(n(m))
+    # strict min ("more than N crew" => N+1); "no " lookbehind avoids "no more than".
+    for m in re.finditer(rf"(?<!no )(?:more than|over|greater than|above)\s*(\d+)\s*{K}", low):
+        mins.append(n(m, 1))
+
+    if maxes:
+        out["max_crew"] = min(maxes)
+    if mins:
+        out["min_crew"] = max(mins)
 
 
 def _extract_part_count(text: str, out: dict) -> None:
@@ -587,7 +641,8 @@ def _part_match_sets(constraints: dict, kind: str) -> tuple[list[str], list[str]
 # ── Verification (server-side authoritative check) ───────────────────────────
 
 def verify_used_parts(constraints: dict | None, used_parts: list[dict],
-                      delta_v: float | None = None) -> list[str]:
+                      delta_v: float | None = None,
+                      crew_count: int | None = None) -> list[str]:
     """
     Compare the craft's actually-used parts against the constraints and return a
     list of human-readable violation messages (empty == passes).
@@ -609,9 +664,10 @@ def verify_used_parts(constraints: dict | None, used_parts: list[dict],
         return []
     used_parts = used_parts or []
 
-    # Whole-craft scalar limits (part count + Δv).
+    # Whole-craft scalar limits (part count + Δv + crew aboard).
     scalar_violations = _check_part_count(constraints, len(used_parts))
     scalar_violations += _check_delta_v(constraints, delta_v)
+    scalar_violations += _check_crew(constraints, crew_count)
 
     if not used_parts:
         return scalar_violations + _missing_required(constraints, [])
@@ -694,6 +750,29 @@ def _check_part_count(constraints: dict, count: int) -> list[str]:
 _DV_TOLERANCE = 0.005
 
 
+def verify_crew(constraints: dict | None, crew_count: int | None) -> list[str]:
+    """Standalone crew-aboard check for missions that report telemetry but no parts
+    list (e.g. active-vessel flights). Returns violation messages (empty == passes)."""
+    if is_empty(constraints) or crew_count is None:
+        return []
+    return _check_crew(constraints, crew_count)
+
+
+def _check_crew(constraints: dict, crew_count: int | None) -> list[str]:
+    """Crew-aboard floor/ceiling. Like Δv it's a whole-craft metric the client reports,
+    so a missing value (None) is skipped rather than failed."""
+    out: list[str] = []
+    if crew_count is None:
+        return out
+    mx = constraints.get("max_crew")
+    mn = constraints.get("min_crew")
+    if mx and crew_count > mx:
+        out.append(f"Too many crew aboard: {crew_count} (max {mx}).")
+    if mn and crew_count < mn:
+        out.append(f"Too few crew aboard: {crew_count} (min {mn}).")
+    return out
+
+
 def _check_delta_v(constraints: dict, delta_v: float | None) -> list[str]:
     out: list[str] = []
     if delta_v is None:
@@ -735,4 +814,8 @@ def summary_line(constraints: dict | None) -> str | None:
         bits.append(f"max {constraints['max_dv']:.0f} m/s Δv")
     if constraints.get("min_dv"):
         bits.append(f"min {constraints['min_dv']:.0f} m/s Δv")
+    if constraints.get("max_crew"):
+        bits.append(f"max {constraints['max_crew']} crew")
+    if constraints.get("min_crew"):
+        bits.append(f"min {constraints['min_crew']} crew")
     return "; ".join(bits) or None

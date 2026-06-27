@@ -38,6 +38,9 @@ def create_listing(
     blueprint_url: str = "",
     thumbnail_url: str = "",
     mods: list[str] | None = None,
+    life_support: str = "none",
+    ls_endurance_days: float = 0.0,
+    ls_crew_capacity: int = 0,
 ) -> ListingData:
     lid = uuid.uuid4().hex[:12]
     now = datetime.utcnow().isoformat()
@@ -64,6 +67,13 @@ def create_listing(
         # list-time. Empty for stock-only crafts or listings made before mod tagging
         # existed. Powers the website's "filter by mod" facet.
         "mods": mods or [],
+        # Life-support flag sent by the KSP client: which LS mod the craft is provisioned
+        # for ("none"/"usi"/"tac"/"snacks"/"kerbalism"), how many in-game days it lasts per
+        # kerbal, and its crew capacity — together these give the min/max endurance range
+        # ("X days for 1 kerbal … Y days for a full crew of N") shown on listings.
+        "life_support": life_support or "none",
+        "ls_endurance_days": float(ls_endurance_days or 0.0),
+        "ls_crew_capacity": int(ls_crew_capacity or 0),
         "status": ACTIVE,
         "created_at": now,
         # Cross-server message mirrors: [{guild_id, channel_id, message_id}, ...]

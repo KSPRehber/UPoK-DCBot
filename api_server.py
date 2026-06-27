@@ -55,6 +55,7 @@ from data import policy as policy
 from data import suspicion as susp
 from data import telemetry_check as tcheck
 from data import mission_constraints as mc
+from data import orbit_constraints as oc
 from data import part_resolver as pr
 from data import marketplace as mkt
 from data import imports as imp
@@ -1223,7 +1224,10 @@ async def _classify_single_contract(gid: int, contract_id: str, mission_text: st
             "'at least N' => min_parts N; 'more than N' => min_parts N+1.\n"
             "   - max_dv / min_dv: vacuum delta-v (Δv) limits in m/s, or null. "
             "Convert km/s to m/s (3.5 km/s => 3500). 'at least 3000 m/s of delta-v' => "
-            "min_dv 3000; 'no more than 5000 m/s dv' => max_dv 5000.\n\n"
+            "min_dv 3000; 'no more than 5000 m/s dv' => max_dv 5000.\n"
+            "   - max_crew / min_crew: crew-aboard limits, or null. 'crew of 3' => "
+            "min_crew 3 and max_crew 3; 'at least 2 kerbals' => min_crew 2; "
+            "'2-4 crew' => min_crew 2, max_crew 4.\n\n"
             "Constraint rules:\n"
             "- 'must use / only / powered by X' => required_*. "
             "'can't use / doesn't use / does not use / no / without / X-less' => forbidden_*.\n"
@@ -1275,6 +1279,14 @@ async def _classify_single_contract(gid: int, contract_id: str, mission_text: st
     else:
         result = _classify_text_heuristic(mission_text)
         result["constraints"] = mc.extract_heuristic(mission_text)
+
+    # Crew-aboard limits ("crew of 3", "2–4 kerbals") aren't in the AI prompt's
+    # vocabulary, so always derive them heuristically and merge in without overriding
+    # any explicit AI value. This keeps min/max-crew working whether or not AI ran.
+    _crew = mc.extract_heuristic(mission_text)
+    for _k in ("min_crew", "max_crew"):
+        if _crew.get(_k) and not result["constraints"].get(_k):
+            result["constraints"][_k] = _crew[_k]
 
     # Cache result back to the contract document
     try:
@@ -1474,9 +1486,18 @@ async def get_active_contracts(user: dict = Depends(get_current_user)):
             # so the client filters/checks the exact part, not a fragile substring.
             if not mc.is_empty(constraints):
                 constraints = _resolve_constraints(constraints, gid, uid, c.get("mission", ""))
-            # Don't ship an all-empty constraints object to the client.
-            if mc.is_empty(constraints):
+            # Orbit-regime requirement parsed from the mission text (heuristic — no
+            # extra AI call). Shipped inside the constraints dict under "orbit" so
+            # the existing constraints plumbing carries it to the client unchanged.
+            orbit_c = oc.extract_heuristic(c.get("mission", ""))
+            # Don't ship an all-empty constraints object to the client — but keep it
+            # when there's an orbit requirement even if there are no part limits.
+            if mc.is_empty(constraints) and oc.is_empty(orbit_c):
                 constraints = None
+            else:
+                constraints = dict(constraints) if constraints else {}
+                if not oc.is_empty(orbit_c):
+                    constraints["orbit"] = orbit_c
 
             rescue_target = None
             rescue_kerbals = []
@@ -2423,6 +2444,11 @@ async def submit_contract(
     # Craft's stock-calculated vacuum Δv (m/s) — the bot can't recompute it, so a
     # min/max-Δv mission limit is verified against this client-reported value.
     delta_v_vac: Optional[str] = Form(None),
+    # Life-support flag of the submitted craft (which LS mod it's provisioned for, its
+    # per-kerbal endurance and crew capacity) — stored on the contract for the review embed.
+    life_support: Optional[str] = Form(None),
+    ls_endurance_days: float = Form(0.0),
+    ls_crew_capacity: int = Form(0),
     user: dict = Depends(get_current_user),
 ):
     """
@@ -2493,6 +2519,20 @@ async def submit_contract(
     # the constraints the editor/submit gate already enforce client-side. Skipped
     # when the contract has no constraints or the client reported no part summary.
     constraints = c.get("constraints")
+    # Crew aboard, read from the submitted telemetry (active-vessel snapshot). Used by
+    # the min/max-crew limit; None when no telemetry was sent (e.g. craft-build).
+    crew_count = None
+    if vessel_data:
+        import json
+        try:
+            _vd_crew = json.loads(vessel_data)
+            _snap = _vd_crew.get("active_vessel") or _vd_crew
+            _cc = _snap.get("crew_count")
+            crew_count = int(_cc) if _cc is not None else None
+        except Exception:
+            crew_count = None
+
+    constraint_checked = False
     if not mc.is_empty(constraints) and (used_parts or delta_v_vac):
         import json
         # Resolve loose part mentions against the submitter's catalog so the
@@ -2509,7 +2549,9 @@ async def submit_contract(
         except (TypeError, ValueError):
             dv = None
         if isinstance(parsed_parts, list):
-            violations = mc.verify_used_parts(constraints, parsed_parts, delta_v=dv)
+            constraint_checked = True
+            violations = mc.verify_used_parts(constraints, parsed_parts, delta_v=dv,
+                                              crew_count=crew_count)
             if violations:
                 log.info("Submission rejected for contract %s: constraint violations %s",
                          contract_id, violations)
@@ -2517,6 +2559,18 @@ async def submit_contract(
                     success=False,
                     message="Craft breaks this contract's mission limits:\n- " + "\n- ".join(violations),
                 )
+
+    # Active-vessel missions may report telemetry but no parts list; still enforce the
+    # crew-aboard limit in that case (the parts check above already covers crew when it ran).
+    if not constraint_checked and crew_count is not None:
+        crew_violations = mc.verify_crew(constraints, crew_count)
+        if crew_violations:
+            log.info("Submission rejected for contract %s: crew violations %s",
+                     contract_id, crew_violations)
+            return SubmissionResult(
+                success=False,
+                message="Craft breaks this contract's mission limits:\n- " + "\n- ".join(crew_violations),
+            )
 
     # Server-side flight-telemetry consistency check (defense-in-depth, like the
     # rescue/part-limit gates above). The client's orbital snapshot is over-determined,
@@ -2540,6 +2594,30 @@ async def submit_contract(
         if verdict.reject:
             log.info("Submission rejected for contract %s: implausible telemetry", contract_id)
             return SubmissionResult(success=False, message=verdict.reject_message)
+
+    # Server-side orbit-regime check — authoritative re-check of the orbit-type
+    # requirement the submit gate enforces client-side. Parsed fresh from the
+    # mission text (so it works regardless of what's stored on the contract) and
+    # verified against the active-vessel snapshot. Skipped when the mission names
+    # no specific orbit or the submission carried no telemetry (e.g. craft-build).
+    orbit_c = oc.extract_heuristic(c.get("mission", ""))
+    if not oc.is_empty(orbit_c) and vessel_data:
+        import json
+        try:
+            _vd_orbit = json.loads(vessel_data)
+            _snap_orbit = _vd_orbit.get("active_vessel") or _vd_orbit
+        except Exception:
+            _snap_orbit = None
+        if isinstance(_snap_orbit, dict):
+            orbit_violations = oc.verify_orbit(orbit_c, _snap_orbit)
+            if orbit_violations:
+                log.info("Submission rejected for contract %s: orbit violations %s",
+                         contract_id, orbit_violations)
+                return SubmissionResult(
+                    success=False,
+                    message="Craft isn't in the orbit this contract requires:\n- "
+                            + "\n- ".join(orbit_violations),
+                )
 
     # Upload files to Firebase Storage
     stored_files = []
@@ -2590,6 +2668,13 @@ async def submit_contract(
         "submitted_at": now,
         "contractor_modlist": modlist,
     }
+
+    # Life-support flag of the delivered craft — drives the "min–max LS for N kerbals"
+    # line on the contract embed. Only stored when the craft is actually provisioned.
+    if life_support and life_support.strip().lower() != "none":
+        update_fields["life_support"] = life_support.strip().lower()
+        update_fields["ls_endurance_days"] = float(ls_endurance_days or 0.0)
+        update_fields["ls_crew_capacity"] = int(ls_crew_capacity or 0)
 
     # Store vessel data and loadmeta if provided
     parsed_vessel_data: dict | None = None
@@ -3208,6 +3293,9 @@ async def marketplace_list_craft(
     cost: float = Form(0.0),
     price: int = Form(...),
     mods: str = Form(""),
+    life_support: str = Form("none"),
+    ls_endurance_days: float = Form(0.0),
+    ls_crew_capacity: int = Form(0),
     user: dict = Depends(get_current_user),
 ):
     """List a craft (.craft blueprint) for sale on the marketplace.
@@ -3252,6 +3340,9 @@ async def marketplace_list_craft(
         mass=mass, cost=cost, price=price,
         craft_url="", craft_filename=filename,
         mods=mod_list,
+        life_support=(life_support or "none").strip().lower(),
+        ls_endurance_days=ls_endurance_days,
+        ls_crew_capacity=ls_crew_capacity,
     )
 
     try:
@@ -3387,6 +3478,9 @@ def _listing_to_model(l: dict) -> MarketplaceListing:
         craft_url=l.get("craft_url") or None,
         craft_filename=l.get("craft_filename") or None,
         status=l.get("status", mkt.ACTIVE),
+        life_support=l.get("life_support", "none") or "none",
+        ls_endurance_days=l.get("ls_endurance_days", 0.0) or 0.0,
+        ls_crew_capacity=l.get("ls_crew_capacity", 0) or 0,
     )
 
 

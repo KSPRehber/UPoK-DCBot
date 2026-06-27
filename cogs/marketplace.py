@@ -35,6 +35,29 @@ def _cid(prefix: str, listing_id: str, guild_id: int) -> str:
     return f"{prefix}:{listing_id}:{guild_id}"
 
 
+_LS_NAMES = {
+    "usi": "USI-LS", "tac": "TAC-LS", "snacks": "Snacks", "kerbalism": "Kerbalism",
+}
+
+
+def life_support_label(life_support: str, endurance_days: float, crew_capacity: int) -> str | None:
+    """Human-readable life-support flag for a craft, or None when stock/empty.
+
+    Endurance is sent per-kerbal, so the range is "longest at 1 kerbal, shortest at a
+    full crew": e.g. "USI-LS · ~180 d solo · ~45 d for full crew of 4"."""
+    key = (life_support or "none").lower()
+    if key == "none" or key not in _LS_NAMES:
+        return None
+    name = _LS_NAMES[key]
+    d = float(endurance_days or 0.0)
+    cap = int(crew_capacity or 0)
+    if d <= 0:
+        return f"{name} · endurance n/a"
+    if cap >= 2:
+        return f"{name} · ~{d:.0f} d solo · ~{d / cap:.0f} d for full crew of {cap}"
+    return f"{name} · ~{d:.0f} d / kerbal"
+
+
 def listing_embed(listing: dict) -> discord.Embed:
     """Build the marketplace channel embed for a listing."""
     sym = settings.CURRENCY_SYMBOL
@@ -51,6 +74,13 @@ def listing_embed(listing: dict) -> discord.Embed:
     e.add_field(name="Mass", value=f"{listing.get('mass', 0):.1f} t", inline=True)
     e.add_field(name="Cost", value=f"{listing.get('cost', 0):,.0f}", inline=True)
     e.add_field(name="Seller", value=listing.get("seller_name", "N/A"), inline=True)
+    ls = life_support_label(
+        listing.get("life_support", "none"),
+        listing.get("ls_endurance_days", 0.0),
+        listing.get("ls_crew_capacity", 0),
+    )
+    if ls:
+        e.add_field(name="🥫 Life Support", value=ls, inline=False)
     # The rendered blueprint is always shown publicly; the .craft file itself is
     # only delivered to the buyer's DMs after purchase.
     if listing.get("blueprint_url"):

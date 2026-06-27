@@ -323,6 +323,11 @@ class MarketplaceListing(BaseModel):
     craft_url: Optional[str] = None
     craft_filename: Optional[str] = None
     status: str = "active"
+    # Life-support flag: which LS mod the craft is provisioned for ("none" if stock/empty),
+    # in-game days it lasts per kerbal, and crew capacity (for the min/max endurance range).
+    life_support: str = "none"
+    ls_endurance_days: float = 0.0
+    ls_crew_capacity: int = 0
 
 class MarketplaceListingsResponse(BaseModel):
     listings: list[MarketplaceListing]

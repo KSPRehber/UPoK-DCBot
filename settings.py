@@ -314,6 +314,25 @@ TELEMETRY_ECC_TOLERANCE = 0.05
 # only ever flags (never rejects) and only when the gap is large.
 TELEMETRY_BODY_RADIUS_TOLERANCE = 0.5
 
+# ── Orbit-type ("orbital regime") enforcement ─────────────────────────────────
+# A contract whose mission text names a specific orbit (polar, equatorial,
+# keostationary, Molniya, …) is verified against the craft's reported orbital
+# elements at submit time, on top of the body/situation gate — see
+# data/orbit_constraints.py. Pure client-reported values like Δv, backstopped by
+# the telemetry-consistency check above.
+ORBIT_CHECK_ENABLED = True
+# Inclination is reported in degrees (0..180); the bands below are absolute degrees.
+ORBIT_POLAR_INCL_TOL = 10.0       # |i - 90| ≤ this counts as polar
+ORBIT_EQUATORIAL_INCL_TOL = 5.0   # i ≤ this (or ≥ 180 - this) counts as equatorial
+ORBIT_INCLINED_MARGIN = 1.0       # prograde i < 90 - margin; retrograde i > 90 + margin
+ORBIT_CIRCULAR_ECC_TOL = 0.05     # e ≤ this counts as circular
+ORBIT_ELLIPTIC_ECC_MIN = 0.20     # e ≥ this counts as elliptical / eccentric
+ORBIT_SYNC_PERIOD_TOL = 0.05      # |T - factor·T_body| / target ≤ this counts as synchronous
+ORBIT_FROZEN_INCL = 63.4          # Molniya / Tundra critical ("frozen") inclination
+ORBIT_FROZEN_INCL_TOL = 5.0
+ORBIT_MOLNIYA_ECC_MIN = 0.50
+ORBIT_TUNDRA_ECC_MIN = 0.20
+
 # ── Known Celestial Bodies ───────────────────────────────────────────────────
 # Used by the heuristic mission classifier (fallback when Gemini is unavailable).
 # The AI classifier handles any body name from text automatically — this list
